@@ -6,7 +6,7 @@
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/License-GPL--2.0--or--later-blue)](LICENSE) [![365 Open Source Plan #037](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23037-1f6feb)](https://github.com/rockbenben/365opensource)
 
-[⬇ Download for Windows / macOS / Linux](https://github.com/rockbenben/scene-anchor/releases) · [简体中文](README.zh.md)
+[⬇ Download for Windows / macOS / Linux](https://github.com/rockbenben/scene-anchor/releases) · [OBS Forum](https://obsproject.com/forum/resources/sceneanchor.2666/) · [简体中文](README.zh.md)
 
 ![The SceneAnchor dock: nested folders, colour labels and unfiled scenes](docs/images/hero-en.webp)
 

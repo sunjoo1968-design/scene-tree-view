@@ -6,7 +6,7 @@
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/License-GPL--2.0--or--later-blue)](LICENSE) [![365 开源计划 #037](https://img.shields.io/badge/365%20%E5%BC%80%E6%BA%90%E8%AE%A1%E5%88%92-%23037-1f6feb)](https://github.com/rockbenben/365opensource)
 
-[⬇ 下载 Windows / macOS / Linux 版](https://github.com/rockbenben/scene-anchor/releases) · [English](README.md)
+[⬇ 下载 Windows / macOS / Linux 版](https://github.com/rockbenben/scene-anchor/releases) · [OBS 论坛](https://obsproject.com/forum/resources/sceneanchor.2666/) · [English](README.md)
 
 ![场景锚点面板：嵌套文件夹、颜色标签与未归类场景](docs/images/hero-zh.webp)
 
