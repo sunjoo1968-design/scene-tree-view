@@ -20,7 +20,7 @@
 | Platform | Windows x64 — developed and tested here. macOS (Universal) and Ubuntu x86_64 build and package in CI but have not been run on real hardware; see Limitations |
 | Scenes | Main canvas only — see Limitations |
 | Interface | 12 languages, follows OBS's own language setting |
-| Install | Windows `.zip` · macOS `.pkg` installer (unsigned, see Install) · Linux `.deb` |
+| Install | Windows `.exe` installer or `.zip` · macOS `.pkg` installer (unsigned, see Install) · Linux `.deb` |
 
 ## Features
 
@@ -53,7 +53,22 @@ Existing scene-tree plugins ([DigitOtter/obs_scene_tree_view](https://github.com
 
 ## Install
 
-Grab your platform's file from [Releases](https://github.com/rockbenben/scene-anchor/releases): **Windows** ships a `.zip` to unpack into your OBS Studio plugin directory, **macOS** a `.pkg` installer, **Linux** a `.deb` (`sudo apt install ./scene-anchor-*.deb`).
+Grab your platform's file from [Releases](https://github.com/rockbenben/scene-anchor/releases): **Windows** an `.exe` installer (or a `.zip`), **macOS** a `.pkg` installer, **Linux** a `.deb` (`sudo apt install ./scene-anchor-*.deb`).
+
+**Windows: run the `.exe` and you're done.** It defaults to `C:\ProgramData\obs-studio\plugins\` — the one plugin directory outside OBS's own program folder that OBS scans on Windows, and the one an OBS update won't wipe. You can point it at an OBS folder instead (a portable copy, or `C:\Program Files\obs-studio`) and it will lay the files out the way *that* location needs; the two layouts differ and the installer picks the right one from the folder you choose. Switching between the two also cleans up the old copy, so OBS never ends up loading the plugin twice. Both targets are machine-wide, so it asks for administrator rights once. It shows up under Settings → Apps if you ever want it gone. The installer is not code-signed, so Windows SmartScreen will say *"Windows protected your PC"* — click **More info → Run anyway**.
+
+**Windows by hand (the `.zip`).** Unzip it and move the whole `scene-anchor` folder into `C:\ProgramData\obs-studio\plugins\` — don't split `bin` and `data` up, the archive is already in the layout OBS expects. Paste `%ProgramData%\obs-studio\plugins` into the Explorer address bar to get there, creating the `plugins` folder if it isn't there yet. The result is what the installer would have produced:
+
+```
+C:\ProgramData\obs-studio\plugins\scene-anchor\bin\64bit\scene-anchor.dll
+C:\ProgramData\obs-studio\plugins\scene-anchor\data\locale\en-US.ini
+```
+
+Note it is `ProgramData`, not `%APPDATA%` — OBS reads plugins from the machine-wide directory on Windows, and a copy under `AppData\Roaming` is silently never loaded.
+
+**Inside an OBS folder instead (required for portable OBS).** That layout is different, and the two folders *do* split up: `bin\64bit\*` goes to `<OBS>\obs-plugins\64bit\`, and the **contents** of `data\` go to `<OBS>\data\obs-plugins\scene-anchor\` — where `<OBS>` is your portable folder, or `C:\Program Files\obs-studio` for a normal install. If you'd rather not do that by hand, the installer covers this case too — just point it at `<OBS>` on its destination page.
+
+Restart OBS after any of these.
 
 **macOS: the installer is not signed.** Double-clicking the `.pkg` gets you *"cannot be opened because it is from an unidentified developer"* — right-click it and choose **Open** instead, or allow it under System Settings → Privacy & Security. This is about the installer, not the plugin: OBS ships `com.apple.security.cs.disable-library-validation` in its own entitlements (`frontend/cmake/macos/entitlements.plist`) precisely so it can load third-party plugins, so an unsigned plugin loads normally once installed. Signing the installer needs an Apple Developer ID, which most individual OBS plugin authors don't buy — [obs-move-transition](https://github.com/exeldro/obs-move-transition), [waveform](https://github.com/phandasm/waveform) and [obs-multi-rtmp](https://github.com/sorayuki/obs-multi-rtmp) all ship unsigned packages today.
 

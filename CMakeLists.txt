@@ -55,3 +55,10 @@ configure_file(cmake/common/resources/manifest.json.in "${CMAKE_CURRENT_BINARY_D
 target_add_resource(${CMAKE_PROJECT_NAME} "${CMAKE_CURRENT_BINARY_DIR}/manifest.json")
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+# Windows 安装包脚本。放在这里而不是 cmake/windows/helpers.cmake：那一份是上游
+# obs-plugintemplate 的模板代码，改动会在下次同步模板时变成冲突。这里只做变量替换，
+# 不进构建图——真正编译 .exe 的是发行流程里的 iscc（见 .github/scripts/Package-Windows.ps1）。
+if(OS_WINDOWS)
+  configure_file(build-aux/installer-Windows.iss.in "${CMAKE_CURRENT_BINARY_DIR}/installer-Windows.generated.iss" @ONLY)
+endif()

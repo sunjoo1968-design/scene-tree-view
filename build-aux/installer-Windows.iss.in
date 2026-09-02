@@ -1,0 +1,178 @@
+; SceneAnchor Windows 安装包（Inno Setup 6.3+）
+;
+; 这是模板。CMake 配置期把它替换成 build_x64/installer-Windows.generated.iss，
+; 发行时由 .github/scripts/Package-Windows.ps1 调 iscc 编译——改这个文件，不要改生成物。
+;
+; ── 两套布局，按用户选的目录切 ─────────────────────────────────────────────
+; Windows 上 OBS 从两个地方加载插件，且要求的目录结构**不同**：
+;
+;   ① %ProgramData%\obs-studio\plugins\<模块名>\bin\64bit  +  ...\<模块名>\data
+;      依据 obs-studio 32 的 frontend/widgets/OBSBasic.cpp::AddExtraModulePaths()：
+;      Windows 分支走 GetProgramDataPath(..., "obs-studio/plugins/%module%")，而
+;      os_get_program_data_path 用的是 CSIDL_COMMON_APPDATA，即 C:\ProgramData
+;      （**不是** %APPDATA%，那是 CSIDL_APPDATA，Windows 上不参与插件扫描——只有
+;      Linux 分支才用 config path）；随后 obs_add_module_path(path + "/bin/64bit",
+;      path + "/data")。默认走这一套：OBS 更新重写自身安装目录时不会波及它。
+;
+;   ② <OBS 目录>\obs-plugins\64bit  +  <OBS 目录>\data\obs-plugins\<模块名>
+;      OBS 自身安装目录的布局。便携版**只**认这一套——portable_mode 下
+;      AddExtraModulePaths() 直接 return，①根本不会被扫描。
+;
+; 所以目录选择页是开着的，[Files] 里两套载荷各挂一个 Check:，按用户选的目录是否落在
+; {commonappdata} 下决定装哪一套。做法照搬 advanced-scene-switcher。
+;
+; 要提权（PrivilegesRequired=admin）。两个目标都是全机范围：OBS 安装目录自不必说；
+; C:\ProgramData 的默认 ACL 虽然给 BUILTIN\Users 带 Write，但完全控制权只给 CREATOR OWNER，
+; 于是用户 A 装完之后用户 B 的升级覆盖会被拒。同类插件无一例外都要 admin，waveform 甚至把
+; 试过的 PrivilegesRequired=lowest 注释掉留在了文件里。
+
+#define AppName "SceneAnchor"
+#define AppVersion "@CMAKE_PROJECT_VERSION@"
+#define ModuleName "@CMAKE_PROJECT_NAME@"
+; AppId 决定"升级同一个产品"还是"并排装第二份"，一旦发布就不能再改。
+#define AppGuid "C459A50D-D80F-461D-8A3B-4854C1CA7A11"
+
+; 打包时由 Package-Windows.ps1 用 /D 覆盖成本次构建真实的载荷目录（其下有 recommended\
+; 与 portable\ 两棵树）。这里的默认值只为在本机手动跑 iscc 时开箱可用。
+#ifndef PackageDir
+  #define PackageDir "@CMAKE_CURRENT_SOURCE_DIR@\release\Package"
+#endif
+
+[Setup]
+AppId={{{#AppGuid}}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
+VersionInfoVersion={#AppVersion}
+AppPublisher=rockbenben
+AppPublisherURL=https://github.com/rockbenben/scene-anchor
+AppSupportURL=https://github.com/rockbenben/scene-anchor/issues
+AppUpdatesURL=https://github.com/rockbenben/scene-anchor/releases
+DefaultDirName={code:GetDirName}
+; 用户浏览到别的目录时不要再追加一层目录名——两套布局的载荷各自已经自带该带的层级。
+AppendDefaultDirName=no
+DisableDirPage=no
+DirExistsWarning=no
+; 上次装到哪由 GetDirName 从卸载键里读，不让 Inno 自己的记忆压过去。
+UsePreviousAppDir=no
+DisableProgramGroupPage=yes
+PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+LicenseFile=@CMAKE_CURRENT_SOURCE_DIR@\LICENSE
+; 发行时由 Package-Windows.ps1 的 /F 覆盖（跟 zip 同源，都从 buildspec 推出来）。
+; 这里的值同 PackageDir，只为本机手动跑 iscc 时也能得到一个对的名字。
+OutputBaseFilename={#ModuleName}-{#AppVersion}-windows-x64-Installer
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+UninstallDisplayName={#AppName} (OBS plugin)
+
+[Languages]
+Name: "en"; MessagesFile: "compiler:Default.isl"
+
+[Files]
+; .pdb 只对崩溃分析有用，装机不需要——zip 里仍然带着，报 bug 的人从那里取。
+; 推荐布局：{app} = ...\obs-studio\plugins，载荷自带 scene-anchor\ 这一层。
+Source: "{#PackageDir}\recommended\*"; DestDir: "{app}"; Excludes: "*.pdb"; \
+    Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsRecommendedLayout
+; OBS 目录布局：{app} = OBS 根目录，载荷自带 obs-plugins\ 与 data\ 两层。
+Source: "{#PackageDir}\portable\*"; DestDir: "{app}"; Excludes: "*.pdb"; \
+    Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsLegacyLayout
+
+[Messages]
+; 装完看不到面板是这个插件第一位的支持问题（README 里也单开了一段）。安装包是唯一
+; 保证用户会看到的一屏，把这句放在这里，比指望他去读 README 可靠。
+en.FinishedLabel=Setup has installed [name] on your computer.%n%nThe dock is hidden until you turn it on: start OBS Studio and tick View -> Docks -> SceneAnchor.
+
+[Code]
+const
+  UninstallKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1';
+
+// 选中的目录落在 %ProgramData% 下 = 用推荐布局。前缀匹配，与 advanced-scene-switcher 一致。
+function IsUnderProgramData(Path: string): Boolean;
+begin
+  Result := Pos(LowerCase(ExpandConstant('{commonappdata}')), LowerCase(Path)) = 1;
+end;
+
+function IsRecommendedLayout(): Boolean;
+begin
+  Result := IsUnderProgramData(WizardDirValue());
+end;
+
+function IsLegacyLayout(): Boolean;
+begin
+  Result := not IsRecommendedLayout();
+end;
+
+function GetDirName(Value: string): string;
+var
+  PrevPath: string;
+begin
+  Result := ExpandConstant('{commonappdata}\obs-studio\plugins');
+  if RegQueryStringValue(HKLM, UninstallKey, 'InstallLocation', PrevPath) and (PrevPath <> '') then
+    Result := RemoveBackslashUnlessRoot(PrevPath);
+end;
+
+// 目录页放行前先挡两个必然装出「不加载的插件」的选法。两种错法都不会报错、只会静默失效，
+// 用户看到的是「装成功了但插件不见了」——最难排查的那一类，值得在这里花十几行。
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir: string;
+begin
+  Result := True;
+  if CurPageID <> wpSelectDir then
+    Exit;
+
+  Dir := RemoveBackslashUnlessRoot(WizardDirValue());
+  if IsUnderProgramData(Dir) then begin
+    // 推荐布局：载荷自带 scene-anchor\ 那一层，所以必须选到 ...\plugins 为止，
+    // 多选一层会装成 ...\plugins\scene-anchor\scene-anchor\bin\64bit。
+    if CompareText(ExtractFileName(Dir), 'plugins') <> 0 then begin
+      MsgBox('Under ProgramData the target must be the OBS plugins folder itself,'
+             + #13#10 + 'e.g. ' + ExpandConstant('{commonappdata}\obs-studio\plugins') + #13#10#13#10
+             + 'The {#ModuleName} folder is created inside it for you.', mbError, MB_OK);
+      Result := False;
+    end;
+  end else begin
+    // OBS 目录布局：载荷自带 obs-plugins\，所以必须选到 OBS 根目录。判据同 waveform。
+    if not DirExists(Dir + '\obs-plugins\64bit') then begin
+      MsgBox('No obs-plugins\64bit folder here, so this is not an OBS installation.'
+             + #13#10 + 'Pick the OBS Studio root folder (portable or installed),' + #13#10
+             + 'or install to ' + ExpandConstant('{commonappdata}\obs-studio\plugins') + ' instead.',
+             mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
+
+// 换布局重装时，把上一处的文件删掉。不删的话两份 dll 同时躺在 OBS 的两个搜索路径里，
+// OBS 会加载其中一份并对另一份记一行 "module already loaded"——版本还可能不一样，
+// 而用户完全看不出自己在跑哪一份。advanced-scene-switcher 只处理了旧→新一个方向，
+// 这里两个方向都处理：反过来一样会留幽灵。
+procedure RemoveStaleInstall();
+var
+  OldPath: string;
+begin
+  if not RegQueryStringValue(HKLM, UninstallKey, 'InstallLocation', OldPath) then
+    Exit;
+  if OldPath = '' then
+    Exit;
+  OldPath := RemoveBackslashUnlessRoot(OldPath);
+  // 上一次与这一次是同一套布局 → Inno 自己覆盖即可，不用手动删。
+  if IsUnderProgramData(OldPath) = IsRecommendedLayout() then
+    Exit;
+
+  if IsUnderProgramData(OldPath) then begin
+    DelTree(OldPath + '\{#ModuleName}', True, True, True);
+  end else begin
+    DeleteFile(OldPath + '\obs-plugins\64bit\{#ModuleName}.dll');
+    DeleteFile(OldPath + '\obs-plugins\64bit\{#ModuleName}.pdb');
+    DelTree(OldPath + '\data\obs-plugins\{#ModuleName}', True, True, True);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    RemoveStaleInstall();
+end;

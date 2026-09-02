@@ -20,7 +20,7 @@
 | 平台 | Windows x64——开发与实测都在这上面。macOS（Universal）与 Ubuntu x86_64 能在 CI 上编译打包，但从未在真机上跑起来过，见「已知限制」|
 | 场景 | 仅主画布，副画布场景不进树，见「已知限制」 |
 | 界面语言 | 12 种，跟随 OBS 自身的语言设置 |
-| 安装 | Windows 用 `.zip` · macOS 用 `.pkg` 安装包（未签名，见「安装」）· Linux 用 `.deb` |
+| 安装 | Windows 用 `.exe` 安装包或 `.zip` · macOS 用 `.pkg` 安装包（未签名，见「安装」）· Linux 用 `.deb` |
 
 ## 能做什么
 
@@ -53,7 +53,22 @@
 
 ## 安装
 
-到 [Releases](https://github.com/rockbenben/scene-anchor/releases) 下载对应平台的文件：**Windows** 是 `.zip`，解压到 OBS Studio 的插件目录；**macOS** 是 `.pkg` 安装包；**Linux** 是 `.deb`（`sudo apt install ./scene-anchor-*.deb`）。
+到 [Releases](https://github.com/rockbenben/scene-anchor/releases) 下载对应平台的文件：**Windows** 是 `.exe` 安装包（也提供 `.zip`）；**macOS** 是 `.pkg` 安装包；**Linux** 是 `.deb`（`sudo apt install ./scene-anchor-*.deb`）。
+
+**Windows：双击 `.exe` 就装完了。** 默认装进 `C:\ProgramData\obs-studio\plugins\`——这是 OBS 在 Windows 上除自身安装目录外唯一会扫描的插件目录，也是 OBS 更新时不会被清掉的那个。你也可以在安装向导里改指到 OBS 目录（便携版，或 `C:\Program Files\obs-studio`），它会按**那个**位置要求的结构摆放文件；两种布局不同，安装包按你选的目录自动挑对的一套。在两者之间改装时还会清掉旧位置的副本，避免 OBS 把插件加载两次。两个目标都是全机范围的目录，所以会要一次管理员权限。想卸载在「设置 → 应用」里能找到。安装包未做代码签名，Windows SmartScreen 会拦一下（*「Windows 已保护你的电脑」*），点**详细信息 → 仍要运行**即可。
+
+**Windows 手动装（`.zip`）：解压后把整个 `scene-anchor` 文件夹搬进 `C:\ProgramData\obs-studio\plugins\`。** 不要拆开 `bin` 和 `data`——压缩包里本来就是 OBS 认的目录结构。把 `%ProgramData%\obs-studio\plugins` 粘进资源管理器地址栏就能到，没有 `plugins` 目录就新建一个。结果跟安装包装出来的一样：
+
+```
+C:\ProgramData\obs-studio\plugins\scene-anchor\bin\64bit\scene-anchor.dll
+C:\ProgramData\obs-studio\plugins\scene-anchor\data\locale\zh-CN.ini
+```
+
+注意是 `ProgramData`，不是 `%APPDATA%`——Windows 上 OBS 只读全机范围的那个目录，放到 `AppData\Roaming` 下的副本会被静默忽略、永远不加载。
+
+**装进 OBS 目录（便携版必须这样装）：**那边是另一套布局，两个文件夹**要**拆开——`bin\64bit\*` 放进 `<OBS>\obs-plugins\64bit\`，`data\` 的**内容**放进 `<OBS>\data\obs-plugins\scene-anchor\`。`<OBS>` 是你的便携版目录，或者常规安装的 `C:\Program Files\obs-studio`。不想手动摆的话，安装包也覆盖这种情况——在选择目标位置那一页把路径指到 `<OBS>` 即可。
+
+以上几种装法装完都要重启 OBS。
 
 **macOS：安装包未签名。** 双击 `.pkg` 会看到*「无法打开，因为它来自身份不明的开发者」*——改成右键选**打开**，或到系统设置 → 隐私与安全性里放行。这是安装包的事，不是插件的事：OBS 自己的 entitlements 里带着 `com.apple.security.cs.disable-library-validation`（`frontend/cmake/macos/entitlements.plist`），正是为了能加载第三方插件，所以未签名的插件装好之后照常加载。给安装包签名需要 Apple Developer ID，多数独立 OBS 插件作者不会去买——[obs-move-transition](https://github.com/exeldro/obs-move-transition)、[waveform](https://github.com/phandasm/waveform)、[obs-multi-rtmp](https://github.com/sorayuki/obs-multi-rtmp) 至今发的都是未签名的包。
 
