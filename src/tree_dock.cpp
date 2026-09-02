@@ -580,7 +580,18 @@ TreeDock::TreeDock()
 	lay->addLayout(btnRow);
 
 	auto *b = ObsBridge::get();
-	connect(b, &ObsBridge::needsRebuild, this, &TreeDock::rebuild);
+	// 必须是 QueuedConnection，不是风格偏好，是承重的（论坛用户 alladjex 的 c0000005 崩溃）。
+	// rebuild() 会 removeRows(0, rowCount) 销毁全部 QStandardItem，而 needsRebuild 的多数发出点
+	// 都在 Qt 自己的模型信号栈里：改名提交走 QStyledItemDelegate::setModelData →
+	// QSortFilterProxyModel::setData → QStandardItem::setData → dataChanged。直连时我们的槽
+	// 在这条栈中间把 item 全删了，等控制权回到 Qt，两个还没跑完的接收方就踩空：
+	//   ① QStandardItemModelPrivate::_q_emitItemChanged 的 row/column 循环还要再取 q->index()；
+	//   ② 排在它后面的 QSortFilterProxyModelPrivate::_q_sourceDataChanged 拿着 source_top_left
+	//      调 .parent()，QStandardItemModel::parent() 直接解引用 internalPointer() —— 已释放的
+	//      QStandardItem，崩在 qt6gui。用户的崩溃报告栈正是这一串（proxy → qt6gui → 访问违例）。
+	// 同样的形状还有 AnchorModel::dropMimeData（在 QAbstractItemView::dropEvent 里）和右键菜单
+	// 动作（在 QMenu::exec 的嵌套事件循环里）。排队一次，让 Qt 的调用栈先展开完，全部消解。
+	connect(b, &ObsBridge::needsRebuild, this, &TreeDock::rebuild, Qt::QueuedConnection);
 	connect(b, &ObsBridge::sceneStateChanged, this, &TreeDock::onSceneStateChanged);
 	connect(view_, &QTreeView::customContextMenuRequested, this, &TreeDock::onContextMenu);
 
