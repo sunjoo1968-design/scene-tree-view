@@ -24,6 +24,7 @@ enum AnchorRoles {
 	RoleHasKids,
 	RoleActiveScene,
 	RoleProgramScene,
+	RoleContainsProgram,
 };
 
 class AnchorModel : public QStandardItemModel {
@@ -55,6 +56,11 @@ private:
 	void resizeEvent(QResizeEvent *e) override;
 	void updateHintCap();
 	void updateLayoutLock();
+	void moveSelection(int direction);
+	void removeFolders(const QModelIndex &contextIndex = QModelIndex());
+	void findProgramScene();
+	void backupLayout();
+	void restoreLayout();
 	bool hintWanted_ = false;
 	QModelIndex findFolderIndex(const QString &canvas, const NodePath &path) const;
 	QLineEdit *search_ = nullptr;
@@ -64,6 +70,8 @@ private:
 	QSortFilterProxyModel *proxy_ = nullptr;
 	QToolButton *btnAddFolder_ = nullptr, *btnRemove_ = nullptr;
 	QToolButton *btnLayoutLock_ = nullptr;
+	QToolButton *btnUp_ = nullptr, *btnDown_ = nullptr, *btnReset_ = nullptr;
+	QToolButton *btnFindProgram_ = nullptr, *btnBackup_ = nullptr, *btnRestore_ = nullptr;
 	bool rebuilding_ = false;
 	QString activeSceneUuid_;
 	QString pendingRenameCanvas_;

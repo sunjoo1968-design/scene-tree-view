@@ -12,6 +12,7 @@ struct TreeNode {
 	enum Type { Folder, Scene };
 	Type type = Folder;
 	QString name;
+	QString alias;
 	QString uuid;
 	QString color;
 	bool expanded = true;
@@ -33,8 +34,12 @@ struct LiveCanvas {
 
 class TreeStore {
 public:
+	QString nextFolderName(const QString &canvas, const QString &base) const;
 	bool insertFolder(const QString &canvas, const NodePath &parent, int index, const QString &name);
 	bool renameFolder(const QString &canvas, const NodePath &path, const QString &name);
+	bool setSceneAlias(const QString &canvas, const NodePath &path, const QString &alias);
+	bool moveSiblingNodes(const QString &canvas, std::vector<NodePath> sources, int direction);
+	bool resetToLive(const std::vector<LiveCanvas> &live);
 	bool dissolveFolder(const QString &canvas, const NodePath &path);
 	bool removeNode(const QString &canvas, const NodePath &path);
 	bool moveNodes(const QString &canvas, std::vector<NodePath> sources, const NodePath &destFolder, int destIndex,
@@ -54,6 +59,7 @@ public:
 	void resolveAndPrune(const std::vector<LiveCanvas> &live);
 	QString toJson() const;
 	bool fromJson(const QString &json);
+	bool restoreLayout(const QString &json, const std::vector<LiveCanvas> &live);
 	bool isForeign() const { return foreign_; }
 	void clear();
 

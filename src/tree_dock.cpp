@@ -4,6 +4,14 @@
 #include "tree_dock.h"
 #include "obs_bridge.h"
 #include <QColor>
+#include <QApplication>
+#include <QClipboard>
+#include <QInputDialog>
+#include <QFileDialog>
+#include <QFile>
+#include <QSaveFile>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QColorDialog>
 #include <QDockWidget>
 #include <QFont>
@@ -25,6 +33,7 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QSet>
 #include <QSortFilterProxyModel>
 #include <QStyle>
 #include <QStyleOptionViewItem>
@@ -33,6 +42,7 @@
 #include <algorithm>
 #include <cmath>
 #include <climits>
+#include <tuple>
 #include <obs-frontend-api.h>
 #include <obs-module.h>
 #include <obs.h>
@@ -60,6 +70,16 @@ static QIcon anchorSceneIcon(bool dark)
 static QIcon anchorMinusIcon(bool dark)
 {
 	return anchorIcon(dark ? "icons/minus_dark.svg" : "icons/minus_light.svg");
+}
+
+static QIcon anchorRemoveFolderIcon(bool dark)
+{
+	QPixmap pixmap = anchorFolderIcon(dark).pixmap(20, 20);
+	QPainter painter(&pixmap);
+	painter.fillRect(9, 9, 11, 11, QColor(dark ? "#24262b" : "#ffffff"));
+	painter.drawPixmap(9, 9, anchorMinusIcon(dark).pixmap(11, 11));
+	painter.end();
+	return QIcon(pixmap);
 }
 
 struct Opt {
@@ -217,7 +237,8 @@ protected:
 		     const QModelIndex &index) const override
 	{
 		QStyleOptionViewItem activeOption(option);
-		const bool program = index.data(RoleProgramScene).toBool();
+		const bool program = index.data(RoleProgramScene).toBool() ||
+			(index.data(RoleContainsProgram).toBool() && !isExpanded(index));
 		if (program || index.data(RoleActiveScene).toBool()) {
 			// Program takes priority when preview and program refer to the same scene.
 			const QColor highlight(program ? "#8e4149" : "#2456c4");
@@ -447,7 +468,53 @@ TreeDock::TreeDock()
 	btnRemove_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.Menu.RemoveFolder")));
 	btnRow->addWidget(btnAddFolder_);
 	btnRow->addWidget(btnRemove_);
+	btnUp_ = new QToolButton(this);
+	btnUp_->setArrowType(Qt::UpArrow);
+	btnUp_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.MoveUp")));
+	btnDown_ = new QToolButton(this);
+	btnDown_->setArrowType(Qt::DownArrow);
+	btnDown_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.MoveDown")));
+	btnRow->addWidget(btnUp_);
+	btnRow->addWidget(btnDown_);
+	connect(btnUp_, &QToolButton::clicked, this, [this] { moveSelection(-1); });
+	connect(btnDown_, &QToolButton::clicked, this, [this] { moveSelection(1); });
 	btnRow->addStretch();
+	btnFindProgram_ = new QToolButton(this);
+	btnFindProgram_->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+	btnFindProgram_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.FindProgram")));
+	btnRow->addWidget(btnFindProgram_);
+	connect(btnFindProgram_, &QToolButton::clicked, this, &TreeDock::findProgramScene);
+	btnBackup_ = new QToolButton(this);
+	btnBackup_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+	btnBackup_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.BackupLayout")));
+	btnRow->addWidget(btnBackup_);
+	connect(btnBackup_, &QToolButton::clicked, this, &TreeDock::backupLayout);
+	btnRestore_ = new QToolButton(this);
+	btnRestore_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+	btnRestore_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.RestoreLayout")));
+	btnRow->addWidget(btnRestore_);
+	connect(btnRestore_, &QToolButton::clicked, this, &TreeDock::restoreLayout);
+	btnReset_ = new QToolButton(this);
+	btnReset_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+	btnReset_->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.Reset")));
+	btnRow->addWidget(btnReset_);
+	connect(btnReset_, &QToolButton::clicked, this, [this] {
+		auto *bridge = ObsBridge::get();
+		if (bridge->option("LayoutLocked", false))
+			return;
+		const QString snapshot = bridge->store.toJson();
+		if (QMessageBox::question(this, QString::fromUtf8(obs_module_text("SceneAnchor.Reset")),
+			QString::fromUtf8(obs_module_text("SceneAnchor.ResetConfirm")),
+			QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+			return;
+		if (snapshot != bridge->store.toJson())
+			return;
+		const auto live = bridge->liveCanvases();
+		bridge->applyTreeOp(obs_module_text("SceneAnchor.Reset"), [&] {
+			return bridge->store.resetToLive(live);
+		});
+		search_->clear();
+	});
 	btnLayoutLock_ = new QToolButton(this);
 	btnLayoutLock_->setCheckable(true);
 	btnLayoutLock_->setChecked(ObsBridge::get()->option("LayoutLocked", false));
@@ -466,6 +533,7 @@ TreeDock::TreeDock()
 
 	connect(search_, &QLineEdit::textChanged, this, [this](const QString &t) {
 		proxy_->setFilterFixedString(t);
+		updateLayoutLock();
 		if (!t.isEmpty()) {
 			view_->expandAll();
 			view_->setDragDropMode(QAbstractItemView::NoDragDrop);
@@ -480,6 +548,15 @@ TreeDock::TreeDock()
 			return;
 		auto *bb = ObsBridge::get();
 		const int kind = it->data(RoleKind).toInt();
+		if (kind == RowPlan::Scene) {
+			const QString cv = it->data(RoleCanvas).toString();
+			const NodePath path = pathOfItem(it);
+			const QString alias = it->text().trimmed();
+			bb->applyTreeOp(obs_module_text("SceneAnchor.RenameAlias"), [&] {
+				return bb->store.setSceneAlias(cv, path, alias);
+			});
+			return;
+		}
 		if (kind == RowPlan::Folder) {
 			const QString cv = it->data(RoleCanvas).toString();
 			const NodePath p = pathOfItem(it);
@@ -514,10 +591,16 @@ TreeDock::TreeDock()
 	};
 	connect(view_, &QTreeView::expanded, this, [expandWrite](const QModelIndex &i) { expandWrite(i, true); });
 	connect(view_, &QTreeView::collapsed, this, [expandWrite](const QModelIndex &i) { expandWrite(i, false); });
+	connect(view_, &QTreeView::expanded, view_->viewport(), qOverload<>(&QWidget::update));
+	connect(view_, &QTreeView::collapsed, view_->viewport(), qOverload<>(&QWidget::update));
 
 	connect(view_->selectionModel(), &QItemSelectionModel::currentChanged, this,
 		[this](const QModelIndex &cur, const QModelIndex &) {
 			if (rebuilding_ || !cur.isValid())
+				return;
+			if (QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
+				return;
+			if (view_->selectionModel()->selectedRows().size() > 1)
 				return;
 			QStandardItem *it = itemAtSourceIndex(cur);
 			if (it && it->data(RoleKind).toInt() == RowPlan::Scene)
@@ -546,23 +629,14 @@ TreeDock::TreeDock()
 			return;
 		bb->applyTreeOp(obs_module_text("SceneAnchor.Undo.AddFolder"), [&] {
 			return bb->store.insertFolder(canvas, parent, index,
-						      QString::fromUtf8(obs_module_text("SceneAnchor.NewFolder")));
+				bb->store.nextFolderName(canvas, QString::fromUtf8(obs_module_text("SceneAnchor.NewFolder"))));
 		});
 	});
 
-	connect(btnRemove_, &QToolButton::clicked, this, [this] {
-		if (!view_->currentIndex().isValid())
-			return;
-		QStandardItem *it = itemAtSourceIndex(view_->currentIndex());
-		auto *bb = ObsBridge::get();
-		const int kind = it->data(RoleKind).toInt();
-		if (kind == RowPlan::Folder) {
-			const QString cv = it->data(RoleCanvas).toString();
-			const NodePath p = pathOfItem(it);
-			bb->applyTreeOp(obs_module_text("SceneAnchor.Undo.RemoveFolder"),
-					[&] { return bb->store.removeNode(cv, p); });
-		}
-	});
+	connect(btnRemove_, &QToolButton::clicked, this, [this] { removeFolders(); });
+	auto *removeShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), view_);
+	removeShortcut->setContext(Qt::WidgetShortcut);
+	connect(removeShortcut, &QShortcut::activated, this, [this] { removeFolders(); });
 
 	obs_log(LOG_INFO, "dock constructed");
 }
@@ -601,7 +675,7 @@ void TreeDock::rebuild()
 	const QIcon sceneIcon = anchorSceneIcon(darkIcons);
 	const bool icons = ObsBridge::get()->option(kOptIcons.key, kOptIcons.def);
 	btnAddFolder_->setIcon(folderIcon);
-	btnRemove_->setIcon(anchorMinusIcon(darkIcons));
+	btnRemove_->setIcon(anchorRemoveFolderIcon(darkIcons));
 
 	QString selUuid, selFolderCanvas, selFolderName;
 	NodePath selFolderPath;
@@ -621,6 +695,16 @@ void TreeDock::rebuild()
 		selFolderName = pendingRenameName_;
 	hasPendingRename_ = false;
 	const int scroll = view_->verticalScrollBar()->value();
+	QSet<QString> selectedScenes;
+	std::vector<std::tuple<QString, NodePath, QString>> selectedFolders;
+	for (const auto &index : view_->selectionModel()->selectedRows()) {
+		if (auto *item = itemAtSourceIndex(index)) {
+			if (item->data(RoleKind).toInt() == RowPlan::Scene)
+				selectedScenes.insert(item->data(RoleUuid).toString());
+			else if (item->data(RoleKind).toInt() == RowPlan::Folder)
+				selectedFolders.emplace_back(item->data(RoleCanvas).toString(), pathOfItem(item), item->text());
+		}
+	}
 
 	auto *b = ObsBridge::get();
 	const auto live = b->liveCanvases();
@@ -649,7 +733,7 @@ void TreeDock::rebuild()
 		if (r.kind == RowPlan::Folder)
 			f |= Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled | Qt::ItemIsEditable;
 		else if (r.kind == RowPlan::Scene)
-			f |= Qt::ItemIsDragEnabled;
+			f |= Qt::ItemIsDragEnabled | Qt::ItemIsEditable;
 		else
 			f = Qt::ItemIsEnabled | Qt::ItemIsDropEnabled;
 		item->setFlags(f);
@@ -712,6 +796,19 @@ void TreeDock::rebuild()
 		}
 	view_->setRootIsDecorated(rootFolder);
 	view_->verticalScrollBar()->setValue(scroll);
+	if (selectedScenes.size() + selectedFolders.size() > 1) {
+		view_->selectionModel()->clearSelection();
+		for (auto *item : model_->findItems(QStringLiteral("*"), Qt::MatchWildcard | Qt::MatchRecursive)) {
+			const bool sceneSelected = item->data(RoleKind).toInt() == RowPlan::Scene &&
+				selectedScenes.contains(item->data(RoleUuid).toString());
+			const bool folderSelected = item->data(RoleKind).toInt() == RowPlan::Folder &&
+				std::find(selectedFolders.begin(), selectedFolders.end(),
+					std::make_tuple(item->data(RoleCanvas).toString(), pathOfItem(item), item->text())) != selectedFolders.end();
+			if (sceneSelected || folderSelected)
+				view_->selectionModel()->select(proxy_->mapFromSource(model_->indexFromItem(item)),
+					QItemSelectionModel::Select | QItemSelectionModel::Rows);
+		}
+	}
 	rebuilding_ = false;
 	onSceneStateChanged();
 }
@@ -724,7 +821,15 @@ void TreeDock::onSceneStateChanged()
 	const QString prog = b->currentSceneUuid();
 	const QString prev = b->currentPreviewUuid();
 	const QString active = prev.isEmpty() ? prog : prev;
-	for (QStandardItem *it : model_->findItems(QStringLiteral("*"), Qt::MatchWildcard | Qt::MatchRecursive)) {
+	btnFindProgram_->setEnabled(!prog.isEmpty());
+	const auto items = model_->findItems(QStringLiteral("*"), Qt::MatchWildcard | Qt::MatchRecursive);
+	for (auto *it : items) {
+		if (it->data(RoleKind).toInt() == RowPlan::Folder) {
+			it->setData(false, RoleContainsProgram);
+			it->setToolTip(QString());
+		}
+	}
+	for (QStandardItem *it : items) {
 		if (it->data(RoleKind).toInt() != RowPlan::Scene)
 			continue;
 		QFont f = it->font();
@@ -733,8 +838,17 @@ void TreeDock::onSceneStateChanged()
 		f.setItalic(false);
 		it->setData(u == active, RoleActiveScene);
 		it->setData(u == prog, RoleProgramScene);
+		if (!prog.isEmpty() && u == prog) {
+			for (auto *parent = it->parent(); parent; parent = parent->parent()) {
+				if (parent->data(RoleKind).toInt() != RowPlan::Folder)
+					continue;
+				parent->setData(true, RoleContainsProgram);
+				parent->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.ContainsProgram")).arg(it->text()));
+			}
+		}
 		it->setFont(f);
-		if (u == active && activeSceneUuid_ != active) {
+		if (u == active && activeSceneUuid_ != active &&
+		    view_->selectionModel()->selectedRows().size() <= 1) {
 			const QModelIndex index = proxy_->mapFromSource(model_->indexFromItem(it));
 			if (index.isValid()) {
 				const QSignalBlocker blocker(view_->selectionModel());
@@ -748,6 +862,219 @@ void TreeDock::onSceneStateChanged()
 	view_->viewport()->update();
 }
 
+void TreeDock::moveSelection(int direction)
+{
+	if (btnLayoutLock_->isChecked() || !search_->text().isEmpty())
+		return;
+	QString canvas;
+	std::vector<NodePath> paths;
+	for (const auto &index : view_->selectionModel()->selectedRows()) {
+		auto *item = itemAtSourceIndex(index);
+		if (!item)
+			return;
+		const QString cv = item->data(RoleCanvas).toString();
+		if (!canvas.isEmpty() && canvas != cv)
+			return;
+		canvas = cv;
+		paths.push_back(pathOfItem(item));
+	}
+	auto *bridge = ObsBridge::get();
+	bool moved = false;
+	bridge->applyTreeOp(obs_module_text("SceneAnchor.Undo.Move"), [&] {
+		moved = bridge->store.moveSiblingNodes(canvas, paths, direction);
+		return moved;
+	});
+	if (moved) {
+		rebuild();
+		const QSignalBlocker blocker(view_->selectionModel());
+		view_->selectionModel()->clearSelection();
+		for (auto path : paths) {
+			path.back() += direction;
+			for (auto *item : model_->findItems(QStringLiteral("*"), Qt::MatchWildcard | Qt::MatchRecursive))
+				if (item->data(RoleCanvas).toString() == canvas && pathOfItem(item) == path) {
+					const auto index = proxy_->mapFromSource(model_->indexFromItem(item));
+					view_->selectionModel()->setCurrentIndex(index,
+						QItemSelectionModel::Select | QItemSelectionModel::Rows);
+				}
+		}
+	}
+}
+
+static QString sceneCollectionName()
+{
+	char *name = obs_frontend_get_current_scene_collection();
+	const QString result = QString::fromUtf8(name ? name : "");
+	bfree(name);
+	return result;
+}
+
+void TreeDock::findProgramScene()
+{
+	const QString program = ObsBridge::get()->currentSceneUuid();
+	if (program.isEmpty())
+		return;
+	// Never change currentIndex: that signal is connected to scene switching.
+	const QSignalBlocker blocker(view_->selectionModel());
+	search_->clear();
+	for (auto *item : model_->findItems(QStringLiteral("*"), Qt::MatchWildcard | Qt::MatchRecursive)) {
+		if (item->data(RoleKind).toInt() != RowPlan::Scene || item->data(RoleUuid).toString() != program)
+			continue;
+		const auto index = proxy_->mapFromSource(model_->indexFromItem(item));
+		for (auto parent = index.parent(); parent.isValid(); parent = parent.parent())
+			view_->setExpanded(parent, true);
+		view_->scrollTo(index, QAbstractItemView::PositionAtCenter);
+		return;
+	}
+}
+
+void TreeDock::backupLayout()
+{
+	auto *bridge = ObsBridge::get();
+	const QString title = QString::fromUtf8(obs_module_text("SceneAnchor.BackupLayout"));
+	const QString collection = sceneCollectionName();
+	TreeStore copy;
+	if (bridge->store.isForeign() || !copy.fromJson(bridge->store.toJson()))
+		return;
+	const auto live = bridge->liveCanvases();
+	copy.placeMissingScenesAtRoot(live);
+	std::map<QString, QString> names;
+	for (const auto &canvas : live)
+		for (const auto &scene : canvas.scenes)
+			names[scene.uuid] = scene.name;
+	copy.stampSceneNames(names);
+	QJsonObject backup;
+	backup["format"] = "scene-tree-view-layout";
+	backup["version"] = 1;
+	backup["collection"] = collection;
+	backup["layout"] = QJsonDocument::fromJson(copy.toJson().toUtf8()).object();
+	const QByteArray data = QJsonDocument(backup).toJson();
+	// Apply the same validation to exports so every written file can be restored.
+	TreeStore validated;
+	if (data.size() > 8 * 1024 * 1024 || !validated.restoreLayout(copy.toJson(), live)) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupInvalid")));
+		return;
+	}
+	const QString path = QFileDialog::getSaveFileName(this, title, "scene-tree-layout.json", "JSON (*.json)");
+	if (path.isEmpty())
+		return;
+	QSaveFile file(path);
+	if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit())
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupWriteFailed")));
+}
+
+void TreeDock::restoreLayout()
+{
+	auto *bridge = ObsBridge::get();
+	if (bridge->option("LayoutLocked", false))
+		return;
+	const QString title = QString::fromUtf8(obs_module_text("SceneAnchor.RestoreLayout"));
+	const QString collection = sceneCollectionName();
+	const QString snapshot = bridge->store.toJson();
+	const QString path = QFileDialog::getOpenFileName(this, title, QString(), "JSON (*.json)");
+	if (path.isEmpty())
+		return;
+	auto unchanged = [&] {
+		return !bridge->option("LayoutLocked", false) && collection == sceneCollectionName() &&
+			snapshot == bridge->store.toJson();
+	};
+	if (!unchanged()) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupChanged")));
+		return;
+	}
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly) || file.size() > 8 * 1024 * 1024) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupInvalid")));
+		return;
+	}
+	const auto bytes = file.read(8 * 1024 * 1024 + 1);
+	QJsonParseError error;
+	const auto document = QJsonDocument::fromJson(bytes, &error);
+	const auto backup = document.object();
+	if (file.error() != QFileDevice::NoError || bytes.size() > 8 * 1024 * 1024 ||
+	    error.error != QJsonParseError::NoError || !document.isObject() ||
+	    backup["format"].toString() != "scene-tree-view-layout" || backup["version"].toDouble() != 1 ||
+	    !backup["layout"].isObject() || !backup["collection"].isString()) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupInvalid")));
+		return;
+	}
+	if (backup["collection"].toString() != collection) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupWrongCollection")));
+		return;
+	}
+	const QString layout = QString::fromUtf8(QJsonDocument(backup["layout"].toObject()).toJson(QJsonDocument::Compact));
+	TreeStore candidate;
+	if (!candidate.restoreLayout(layout, bridge->liveCanvases())) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupInvalid")));
+		return;
+	}
+	if (QMessageBox::question(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.RestoreConfirm")),
+		QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+		return;
+	if (!unchanged()) {
+		QMessageBox::warning(this, title, QString::fromUtf8(obs_module_text("SceneAnchor.BackupChanged")));
+		return;
+	}
+	bool restored = false;
+	bridge->applyTreeOp(obs_module_text("SceneAnchor.RestoreLayout"), [&] {
+		restored = bridge->store.restoreLayout(layout, bridge->liveCanvases());
+		return restored;
+	});
+	if (restored)
+		search_->clear();
+}
+
+void TreeDock::removeFolders(const QModelIndex &contextIndex)
+{
+	auto *bridge = ObsBridge::get();
+	if (bridge->option("LayoutLocked", false))
+		return;
+	QModelIndexList indexes = view_->selectionModel()->selectedRows();
+	if (contextIndex.isValid() && !view_->selectionModel()->isSelected(contextIndex))
+		indexes = {contextIndex};
+	std::vector<std::pair<QString, NodePath>> targets;
+	for (const auto &index : indexes) {
+		const auto *item = itemAtSourceIndex(index);
+		if (item && item->data(RoleKind).toInt() == RowPlan::Folder)
+			targets.emplace_back(item->data(RoleCanvas).toString(), pathOfItem(item));
+	}
+	std::sort(targets.begin(), targets.end());
+	// An ancestor already includes its descendants. Reverse deletion keeps sibling paths valid.
+	std::vector<std::pair<QString, NodePath>> roots;
+	for (const auto &target : targets) {
+		if (!roots.empty() && roots.back().first == target.first &&
+		    roots.back().second.size() <= target.second.size() &&
+		    std::equal(roots.back().second.begin(), roots.back().second.end(), target.second.begin()))
+			continue;
+		roots.push_back(target);
+	}
+	if (roots.empty())
+		return;
+	const QString snapshot = bridge->store.toJson();
+	QMessageBox dialog(QMessageBox::Question,
+		QString::fromUtf8(obs_module_text("SceneAnchor.Menu.RemoveFolder")),
+		QString::fromUtf8(obs_module_text("SceneAnchor.RemoveFoldersConfirm")).arg(roots.size()),
+		QMessageBox::NoButton, this);
+	auto *dissolve = dialog.addButton(QString::fromUtf8(obs_module_text("SceneAnchor.KeepContents")),
+		QMessageBox::ActionRole);
+	auto *remove = dialog.addButton(QString::fromUtf8(obs_module_text("SceneAnchor.RemoveContents")),
+		QMessageBox::DestructiveRole);
+	auto *cancel = dialog.addButton(QMessageBox::Cancel);
+	dialog.setDefaultButton(cancel);
+	dialog.setEscapeButton(cancel);
+	dialog.exec();
+	if ((dialog.clickedButton() != dissolve && dialog.clickedButton() != remove) ||
+	    bridge->option("LayoutLocked", false) || snapshot != bridge->store.toJson())
+		return;
+	const bool keep = dialog.clickedButton() == dissolve;
+	bridge->applyTreeOp(obs_module_text(keep ? "SceneAnchor.Undo.Dissolve" : "SceneAnchor.Undo.RemoveFolder"), [&] {
+		bool changed = false;
+		for (auto it = roots.rbegin(); it != roots.rend(); ++it)
+			changed |= keep ? bridge->store.dissolveFolder(it->first, it->second)
+					: bridge->store.removeNode(it->first, it->second);
+		return changed;
+	});
+}
+
 void TreeDock::updateLayoutLock()
 {
 	const bool locked = btnLayoutLock_->isChecked();
@@ -756,6 +1083,10 @@ void TreeDock::updateLayoutLock()
 	btnLayoutLock_->setToolTip(btnLayoutLock_->text());
 	btnAddFolder_->setEnabled(!locked);
 	btnRemove_->setEnabled(!locked);
+	btnUp_->setEnabled(!locked && search_->text().isEmpty());
+	btnDown_->setEnabled(!locked && search_->text().isEmpty());
+	btnReset_->setEnabled(!locked);
+	btnRestore_->setEnabled(!locked);
 	view_->setEditTriggers(locked ? QAbstractItemView::NoEditTriggers : QAbstractItemView::EditKeyPressed);
 	view_->setDragDropMode(locked || !search_->text().isEmpty() ? QAbstractItemView::NoDragDrop
 								 : QAbstractItemView::InternalMove);
@@ -788,26 +1119,24 @@ void TreeDock::onContextMenu(const QPoint &pos)
 
 	auto addColorMenu = [&](QStandardItem *target) {
 		QMenu *cm = menu.addMenu(QString::fromUtf8(obs_module_text("SceneAnchor.Menu.Color")));
-		const QString cv = target->data(RoleCanvas).toString();
-		const NodePath basePath = pathOfItem(target);
-		const QString uuid = target->data(RoleUuid).toString();
+		std::vector<std::pair<QString, NodePath>> targets;
+		const auto targetIndex = proxy_->mapFromSource(model_->indexFromItem(target));
+		const auto indexes = view_->selectionModel()->isSelected(targetIndex)
+			? view_->selectionModel()->selectedRows() : QModelIndexList{targetIndex};
+		for (const auto &index : indexes) {
+			const auto *item = itemAtSourceIndex(index);
+			if (item && item->data(RoleKind).toInt() == target->data(RoleKind).toInt())
+				targets.emplace_back(item->data(RoleCanvas).toString(), pathOfItem(item));
+		}
 		const QString snapshot = b->store.toJson();
-		const bool isUnplacedScene = target->data(RoleKind).toInt() == RowPlan::Scene &&
-					     !target->data(RolePlaced).toBool();
-		auto apply = [this, b, cv, basePath, uuid, isUnplacedScene, snapshot](const QString &color) {
+		auto apply = [b, targets, snapshot](const QString &color) {
 			if (b->store.toJson() != snapshot)
 				return;
-			NodePath p = basePath;
 			b->applyTreeOp(obs_module_text("SceneAnchor.Undo.Color"), [&] {
-				if (isUnplacedScene) {
-					if (!b->store.placeScene(cv, uuid, {}, INT_MAX))
-						return false;
-					auto found = b->store.findScene(cv, uuid);
-					if (!found)
-						return false;
-					p = *found;
-				}
-				return b->store.setColor(cv, p, color);
+				bool changed = false;
+				for (const auto &[canvas, path] : targets)
+					changed |= b->store.setColor(canvas, path, color);
+				return changed;
 			});
 		};
 		const QColor menuBg = view_->palette().color(QPalette::Base);
@@ -837,6 +1166,27 @@ void TreeDock::onContextMenu(const QPoint &pos)
 	};
 
 	if (kind == RowPlan::Scene) {
+		const QString uuid = it->data(RoleUuid).toString();
+		const QString cv = it->data(RoleCanvas).toString();
+		const QString label = it->text();
+		QAction *copy = menu.addAction(QString::fromUtf8(obs_module_text("SceneAnchor.CopyName")));
+		connect(copy, &QAction::triggered, this, [label] { QApplication::clipboard()->setText(label); });
+		QAction *rename = menu.addAction(QString::fromUtf8(obs_module_text("SceneAnchor.RenameAlias")));
+		connect(rename, &QAction::triggered, this, [this, b, uuid, cv, label] {
+			const QString before = b->store.toJson();
+			bool ok = false;
+			const QString alias = QInputDialog::getText(this,
+				QString::fromUtf8(obs_module_text("SceneAnchor.RenameAlias")),
+				QString::fromUtf8(obs_module_text("SceneAnchor.AliasPrompt")),
+				QLineEdit::Normal, label, &ok);
+			if (!ok || before != b->store.toJson())
+				return;
+			const auto path = b->store.findScene(cv, uuid);
+			if (path)
+				b->applyTreeOp(obs_module_text("SceneAnchor.RenameAlias"), [&] {
+					return b->store.setSceneAlias(cv, *path, alias);
+				});
+		});
 		addColorMenu(it);
 	} else if (kind == RowPlan::Folder) {
 		const QString cv = it->data(RoleCanvas).toString();
@@ -845,7 +1195,7 @@ void TreeDock::onContextMenu(const QPoint &pos)
 		connect(addSub, &QAction::triggered, this, [b, cv, p] {
 			b->applyTreeOp(obs_module_text("SceneAnchor.Undo.AddFolder"), [&] {
 				return b->store.insertFolder(
-					cv, p, INT_MAX, QString::fromUtf8(obs_module_text("SceneAnchor.NewFolder")));
+					cv, p, INT_MAX, b->store.nextFolderName(cv, QString::fromUtf8(obs_module_text("SceneAnchor.NewFolder"))));
 			});
 		});
 		// Re-locate the folder at trigger time; the model may rebuild while the menu is open.
@@ -856,17 +1206,12 @@ void TreeDock::onContextMenu(const QPoint &pos)
 				view_->edit(idx);
 		});
 		menu.setToolTipsVisible(true);
-		QAction *diss = menu.addAction(QString::fromUtf8(obs_module_text("SceneAnchor.Menu.Dissolve")));
-		diss->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.Menu.DissolveTip")));
-		connect(diss, &QAction::triggered, this, [b, cv, p] {
-			b->applyTreeOp(obs_module_text("SceneAnchor.Undo.Dissolve"),
-				       [&] { return b->store.dissolveFolder(cv, p); });
-		});
 		QAction *rm = menu.addAction(QString::fromUtf8(obs_module_text("SceneAnchor.Menu.RemoveFolder")));
 		rm->setToolTip(QString::fromUtf8(obs_module_text("SceneAnchor.Menu.RemoveFolderTip")));
-		connect(rm, &QAction::triggered, this, [b, cv, p] {
-			b->applyTreeOp(obs_module_text("SceneAnchor.Undo.RemoveFolder"),
-				       [&] { return b->store.removeNode(cv, p); });
+		connect(rm, &QAction::triggered, this, [this, cv, p] {
+			const auto index = findFolderIndex(cv, p);
+			if (index.isValid())
+				removeFolders(index);
 		});
 		menu.addSeparator();
 		addColorMenu(it);

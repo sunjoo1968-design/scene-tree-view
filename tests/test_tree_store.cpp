@@ -3,6 +3,9 @@
 
 #include "../src/tree_store.h"
 #include "../src/projection.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <cstdio>
 
 static int failures = 0;
@@ -583,9 +586,303 @@ static void test_name_fallback()
 	}
 }
 
+static void test_scene_alias()
+{
+	TreeStore s;
+	CHECK(s.placeScene("cv1", "old", {}, 0));
+	CHECK(s.setSceneAlias("cv1", {0}, "  Display title  "));
+	s.stampSceneNames({{"old", "OBS original"}});
+	TreeStore restored;
+	CHECK(restored.fromJson(s.toJson()));
+	CHECK(N(restored.nodeAt("cv1", {0})).alias == QStringLiteral("Display title"));
+	CHECK(N(restored.nodeAt("cv1", {0})).name == QStringLiteral("OBS original"));
+	const std::vector<LiveCanvas> live{{"cv1", "Main", {{"new", "OBS original"}}}};
+	restored.resolveAndPrune(live);
+	CHECK(N(restored.nodeAt("cv1", {0})).uuid == QStringLiteral("new"));
+	CHECK(R(planProjection(restored, live), 0).name == QStringLiteral("Display title"));
+	restored.stampSceneNames({{"new", "OBS renamed"}});
+	CHECK(N(restored.nodeAt("cv1", {0})).name == QStringLiteral("OBS renamed"));
+	CHECK(N(restored.nodeAt("cv1", {0})).alias == QStringLiteral("Display title"));
+	CHECK(restored.setSceneAlias("cv1", {0}, " \t\n "));
+	CHECK(N(restored.nodeAt("cv1", {0})).alias.isEmpty());
+	CHECK(R(planProjection(restored, live), 0).name == QStringLiteral("OBS original"));
+	CHECK(!restored.toJson().contains(QStringLiteral("\"alias\"")));
+	CHECK(restored.insertFolder("cv1", {}, 1, "Folder"));
+	const QString before = restored.toJson();
+	CHECK(!restored.setSceneAlias("cv1", {1}, "Invalid"));
+	CHECK(!restored.setSceneAlias("cv1", {}, "Invalid"));
+	CHECK(!restored.setSceneAlias("missing", {0}, "Invalid"));
+	CHECK(restored.toJson() == before);
+	CHECK(live[0].scenes[0].name == QStringLiteral("OBS original"));
+}
+
+static void test_reset_to_live()
+{
+	TreeStore s = makeFixture();
+	CHECK(s.setSceneAlias("cv1", {0, 0}, "Alias"));
+	CHECK(s.insertFolder("gone", {}, 0, "Old"));
+	const std::vector<LiveCanvas> live{
+		{"cv1", "Main", {{"c", "C"}, {"a", "A"}, {"b", "B"}}},
+		{"cv2", "Other", {{"z", "Z"}}}};
+	CHECK(s.resetToLive(live));
+	CHECK(s.canvasRoot("gone") == nullptr);
+	CHECK(C(s.canvasRoot("cv1")).size() == 3);
+	for (int i = 0; i < 3; ++i) {
+		CHECK(N(s.nodeAt("cv1", {i})).type == TreeNode::Scene);
+		CHECK(N(s.nodeAt("cv1", {i})).uuid == live[0].scenes[i].uuid);
+		CHECK(N(s.nodeAt("cv1", {i})).alias.isEmpty());
+	}
+	CHECK(N(s.nodeAt("cv2", {0})).uuid == QStringLiteral("z"));
+	CHECK(s.resetToLive({}));
+	CHECK(s.canvasRoot("cv1") == nullptr);
+	CHECK(s.canvasRoot("cv2") == nullptr);
+	const QString foreign = QStringLiteral("{\"version\":9,\"future\":true}");
+	CHECK(s.fromJson(foreign));
+	CHECK(!s.resetToLive(live));
+	CHECK(!s.setSceneAlias("cv1", {0}, "Alias"));
+	CHECK(!s.moveSiblingNodes("cv1", {{0}}, 1));
+	CHECK(s.isForeign());
+	CHECK(s.toJson() == foreign);
+}
+
+static void test_move_siblings()
+{
+	for (const NodePath &parent : {NodePath{}, NodePath{0}}) {
+		TreeStore s;
+		if (!parent.empty())
+			CHECK(s.insertFolder("cv1", {}, 0, "Folder"));
+		for (int i = 0; i < 5; ++i)
+			CHECK(s.placeScene("cv1", QString::number(i), parent, i));
+		auto path = [&](int i) { NodePath p = parent; p.push_back(i); return p; };
+		auto order = [&]() {
+			QString result;
+			for (int i = 0; i < 5; ++i)
+				result += N(s.nodeAt("cv1", path(i))).uuid;
+			return result;
+		};
+		CHECK(s.moveSiblingNodes("cv1", {path(3), path(1), path(2)}, -1));
+		CHECK(order() == QStringLiteral("12304"));
+		const QString top = s.toJson();
+		CHECK(!s.moveSiblingNodes("cv1", {path(0), path(2)}, -1));
+		CHECK(s.toJson() == top);
+		CHECK(s.moveSiblingNodes("cv1", {path(0), path(1), path(2)}, 1));
+		CHECK(order() == QStringLiteral("01234"));
+		CHECK(s.moveSiblingNodes("cv1", {path(1), path(3), path(1)}, 1));
+		CHECK(order() == QStringLiteral("02143"));
+		const QString bottom = s.toJson();
+		CHECK(!s.moveSiblingNodes("cv1", {path(2), path(4)}, 1));
+		CHECK(s.toJson() == bottom);
+		CHECK(s.moveSiblingNodes("cv1", {path(2), path(4)}, -1));
+		CHECK(order() == QStringLiteral("01234"));
+		const QString before = s.toJson();
+		CHECK(!s.moveSiblingNodes("cv1", {path(1), path(99)}, -1));
+		CHECK(!s.moveSiblingNodes("cv1", {path(1), path(-1)}, 1));
+		CHECK(!s.moveSiblingNodes("cv1", {path(1), {}}, 1));
+		CHECK(!s.moveSiblingNodes("cv1", {path(1)}, 0));
+		CHECK(!s.moveSiblingNodes("cv1", {path(1)}, 2));
+		CHECK(!s.moveSiblingNodes("cv1", {}, -1));
+		CHECK(!s.moveSiblingNodes("missing", {{0}}, 1));
+		CHECK(s.toJson() == before);
+	}
+	TreeStore s = makeFixture();
+	const QString before = s.toJson();
+	CHECK(!s.moveSiblingNodes("cv1", {{0, 0}, {1}}, 1));
+	CHECK(s.toJson() == before);
+}
+
+static void test_next_folder_name()
+{
+	TreeStore s;
+	const QString empty = s.toJson();
+	CHECK(s.nextFolderName("cv1", "Folder ") == QStringLiteral("Folder 1"));
+	CHECK(s.toJson() == empty);
+	CHECK(s.insertFolder("cv1", {}, 0, "Folder 1"));
+	CHECK(s.insertFolder("cv1", {0}, 0, "Folder 2"));
+	CHECK(s.insertFolder("cv1", {0, 0}, 0, "Folder 4"));
+	CHECK(s.insertFolder("cv2", {}, 0, "Folder 3"));
+	CHECK(s.placeScene("cv1", "a", {}, 1));
+	s.stampSceneNames({{"a", "Folder 3"}});
+	CHECK(s.setSceneAlias("cv1", {1}, "Folder 3"));
+	CHECK(s.nextFolderName("cv1", "Folder ") == QStringLiteral("Folder 3"));
+	CHECK(s.renameFolder("cv1", {0, 0, 0}, "Folder 3"));
+	CHECK(s.nextFolderName("cv1", "Folder ") == QStringLiteral("Folder 4"));
+	CHECK(s.renameFolder("cv1", {0, 0}, "Renamed"));
+	CHECK(s.nextFolderName("cv1", "Folder ") == QStringLiteral("Folder 2"));
+	CHECK(s.nextFolderName("cv2", "Folder ") == QStringLiteral("Folder 1"));
+	CHECK(s.nextFolderName("cv1", "") == QStringLiteral("1"));
+}
+
+static void test_bulk_color_persistence()
+{
+	TreeStore s = makeFixture();
+	const std::vector<NodePath> selected{{0}, {0, 0}, {0, 1, 0}, {1}};
+	for (const auto &path : selected)
+		CHECK(s.setColor("cv1", path, "#123456"));
+	TreeStore restored;
+	CHECK(restored.fromJson(s.toJson()));
+	CHECK(restored.toJson() == s.toJson());
+	for (const auto &path : selected)
+		CHECK(N(restored.nodeAt("cv1", path)).color == QStringLiteral("#123456"));
+	CHECK(N(restored.nodeAt("cv1", {0, 1})).color.isEmpty());
+	for (const auto &path : selected)
+		CHECK(restored.setColor("cv1", path, ""));
+	TreeStore cleared;
+	CHECK(cleared.fromJson(restored.toJson()));
+	CHECK(cleared.toJson() == makeFixture().toJson());
+}
+
+static void test_remove_and_dissolve_live_safety()
+{
+	const std::vector<LiveCanvas> live{{"cv1", "Main", {{"a", "A"}, {"b", "B"}, {"c", "C"}}}};
+	TreeStore removed = makeFixture();
+	CHECK(removed.removeNode("cv1", {0}));
+	CHECK(!removed.findScene("cv1", "a"));
+	CHECK(!removed.findScene("cv1", "b"));
+	auto plan = planProjection(removed, live);
+	CHECK(plan.size() == 3);
+	CHECK(R(plan, 1).uuid == QStringLiteral("a") && !R(plan, 1).placed && R(plan, 1).depth == 0);
+	CHECK(R(plan, 2).uuid == QStringLiteral("b") && !R(plan, 2).placed && R(plan, 2).depth == 0);
+	CHECK(removed.placeMissingScenesAtRoot(live));
+	CHECK(N(removed.nodeAt("cv1", {1})).uuid == QStringLiteral("a"));
+	CHECK(N(removed.nodeAt("cv1", {2})).uuid == QStringLiteral("b"));
+	CHECK(removed.removeNode("cv1", {1}));
+	CHECK(removed.placeMissingScenesAtRoot(live));
+	CHECK(N(removed.nodeAt("cv1", {2})).uuid == QStringLiteral("a"));
+
+	TreeStore dissolved = makeFixture();
+	CHECK(dissolved.setColor("cv1", {0, 1, 0}, "#abcdef"));
+	CHECK(dissolved.setSceneAlias("cv1", {0, 1, 0}, "Alias"));
+	const TreeNode *nested = dissolved.nodeAt("cv1", {0, 1, 0});
+	CHECK(dissolved.dissolveFolder("cv1", {0}));
+	CHECK(N(dissolved.nodeAt("cv1", {0})).uuid == QStringLiteral("a"));
+	CHECK(N(dissolved.nodeAt("cv1", {1})).name == QStringLiteral("B"));
+	CHECK(dissolved.nodeAt("cv1", {1, 0}) == nested);
+	CHECK(N(nested).color == QStringLiteral("#abcdef"));
+	CHECK(N(nested).alias == QStringLiteral("Alias"));
+	CHECK(!dissolved.placeMissingScenesAtRoot(live));
+	plan = planProjection(dissolved, live);
+	CHECK(plan.size() == 4);
+	CHECK(R(plan, 0).placed && R(plan, 2).placed && R(plan, 3).placed);
+	CHECK(live[0].scenes.size() == 3);
+	CHECK(live[0].scenes[0].uuid == QStringLiteral("a") && live[0].scenes[0].name == QStringLiteral("A"));
+	CHECK(live[0].scenes[1].uuid == QStringLiteral("b") && live[0].scenes[1].name == QStringLiteral("B"));
+	CHECK(live[0].scenes[2].uuid == QStringLiteral("c") && live[0].scenes[2].name == QStringLiteral("C"));
+}
+
+static QString layoutJson(const QJsonArray &tree)
+{
+	return QString::fromUtf8(QJsonDocument(QJsonObject{
+		{"version", kTreeStoreVersion}, {"canvases", QJsonObject{{"cv1", QJsonObject{{"tree", tree}}}}}
+	}).toJson(QJsonDocument::Compact));
+}
+
+static void test_restore_layout()
+{
+	const std::vector<LiveCanvas> live{{"cv1", "Main", {{"a", "A"}, {"b", "B"}, {"c", "C"}}}};
+	TreeStore backup = makeFixture();
+	CHECK(backup.setSceneAlias("cv1", {0, 0}, "Alias"));
+	CHECK(backup.setColor("cv1", {0}, "#123456"));
+	CHECK(backup.setColor("cv1", {0, 0}, "#abcdef"));
+	CHECK(backup.setExpanded("cv1", {0}, false));
+	backup.stampSceneNames({{"a", "A"}, {"b", "B"}, {"c", "C"}});
+	TreeStore s;
+	CHECK(s.insertFolder("old", {}, 0, "Replace me"));
+	CHECK(s.restoreLayout(backup.toJson(), live));
+	CHECK(s.toJson() == backup.toJson());
+	CHECK(N(s.nodeAt("cv1", {0, 0})).alias == QStringLiteral("Alias"));
+	CHECK(!N(s.nodeAt("cv1", {0})).expanded);
+	CHECK(s.canvasRoot("old") == nullptr);
+	const std::vector<LiveCanvas> changed{{"cv1", "Main", {{"new-a", "A"}, {"c", "C"}, {"d", "D"}}}};
+	CHECK(s.restoreLayout(backup.toJson(), changed));
+	CHECK(N(s.nodeAt("cv1", {0, 0})).uuid == QStringLiteral("new-a"));
+	CHECK(N(s.nodeAt("cv1", {0, 0})).alias == QStringLiteral("Alias"));
+	CHECK(!s.findScene("cv1", "b"));
+	CHECK(N(s.nodeAt("cv1", {0, 1})).children.empty());
+	CHECK(N(s.nodeAt("cv1", {2})).uuid == QStringLiteral("d"));
+	CHECK(changed[0].scenes[0].uuid == QStringLiteral("new-a"));
+	CHECK(changed[0].scenes[0].name == QStringLiteral("A"));
+	CHECK(changed[0].scenes.size() == 3);
+	CHECK(s.restoreLayout(layoutJson({}), live));
+	CHECK(C(s.canvasRoot("cv1")).size() == 3);
+}
+
+static void test_restore_layout_rejections()
+{
+	TreeStore s = makeFixture();
+	const QString before = s.toJson();
+	const std::vector<LiveCanvas> live{{"cv1", "Main", {{"a", "A"}, {"b", "B"}, {"c", "C"}}}};
+	auto reject = [&](const QString &json) {
+		CHECK(!s.restoreLayout(json, live));
+		CHECK(s.toJson() == before);
+	};
+	for (const QString &json : {QStringLiteral("not json"), QStringLiteral("[]"),
+		QStringLiteral("{}"), QStringLiteral("{\"version\":9,\"canvases\":{}}"),
+		QStringLiteral("{\"version\":0,\"canvases\":{}}"),
+		QStringLiteral("{\"version\":1.5,\"canvases\":{}}"),
+		QStringLiteral("{\"version\":\"1\",\"canvases\":{}}"),
+		QStringLiteral("{\"version\":1,\"canvases\":[]}"),
+		QStringLiteral("{\"version\":1,\"canvases\":{\"cv1\":[]}}"),
+		QStringLiteral("{\"version\":1,\"canvases\":{\"cv1\":{}}}"),
+		QStringLiteral("{\"version\":1,\"canvases\":{\"cv1\":{\"tree\":{}}}}"),
+		QStringLiteral("{\"version\":1,\"canvases\":{\"other\":{\"tree\":[]}}}")})
+		reject(json);
+	for (const QJsonValue &node : {QJsonValue(1), QJsonValue(QJsonObject{}),
+		QJsonValue(QJsonObject{{"t", "unknown"}}),
+		QJsonValue(QJsonObject{{"t", "scene"}}),
+		QJsonValue(QJsonObject{{"t", "scene"}, {"uuid", ""}}),
+		QJsonValue(QJsonObject{{"t", "scene"}, {"uuid", 1}}),
+		QJsonValue(QJsonObject{{"t", "folder"}, {"children", QJsonArray{}}}),
+		QJsonValue(QJsonObject{{"t", "folder"}, {"name", "F"}}),
+		QJsonValue(QJsonObject{{"t", "folder"}, {"name", "F"}, {"children", false}})})
+		reject(layoutJson({node}));
+	for (const char *key : {"color", "name", "alias", "expanded"}) {
+		QJsonObject node{{"t", "scene"}, {"uuid", "a"}};
+		node[key] = 1;
+		reject(layoutJson({node}));
+		node[key] = QJsonValue(QJsonValue::Null);
+		reject(layoutJson({node}));
+	}
+	CHECK(!s.restoreLayout(before, {}));
+	CHECK(s.toJson() == before);
+	TreeStore foreign;
+	CHECK(foreign.fromJson(QStringLiteral("{\"version\":9}")));
+	const QString raw = foreign.toJson();
+	CHECK(!foreign.restoreLayout(before, live));
+	CHECK(foreign.toJson() == raw);
+
+	QJsonArray deep;
+	for (int i = 0; i < 64; ++i)
+		deep = QJsonArray{QJsonObject{{"t", "folder"}, {"name", "F"}, {"children", deep}}};
+	TreeStore bounded;
+	CHECK(bounded.restoreLayout(layoutJson(deep), live));
+	deep = QJsonArray{QJsonObject{{"t", "folder"}, {"name", "F"}, {"children", deep}}};
+	reject(layoutJson(deep));
+	QJsonArray many;
+	for (int i = 0; i < 50000; ++i)
+		many.append(QJsonObject{{"t", "folder"}, {"name", "F"}, {"children", QJsonArray{}}});
+	CHECK(bounded.restoreLayout(layoutJson(many), live));
+	many.append(QJsonObject{{"t", "scene"}, {"uuid", "a"}});
+	reject(layoutJson(many));
+	const QString valid = layoutJson({});
+	const int padding = 8 * 1024 * 1024 - valid.toUtf8().size();
+	CHECK(bounded.restoreLayout(valid + QString(padding, QLatin1Char(' ')), live));
+	reject(valid + QString(padding + 1, QLatin1Char(' ')));
+	// UTF-8 bytes, rather than QString character count, determine the limit.
+	reject(layoutJson({QJsonObject{{"t", "scene"}, {"uuid", "a"},
+		{"alias", QString(3 * 1024 * 1024, QChar(0xAC00))}}}));
+}
+
 int main()
 {
 	test_roundtrip();
+	test_restore_layout();
+	test_restore_layout_rejections();
+	test_next_folder_name();
+	test_bulk_color_persistence();
+	test_remove_and_dissolve_live_safety();
+	test_scene_alias();
+	test_reset_to_live();
+	test_move_siblings();
 	test_bad_json();
 	test_foreign_version();
 	test_failed_op_leaves_store_untouched();

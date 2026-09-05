@@ -17,7 +17,8 @@ static void walkChildren(const std::vector<std::unique_ptr<TreeNode>> &children,
 				{RowPlan::Folder, depth, n.name, QString(), path, canvas, n.color, n.expanded, false});
 			walkChildren(n.children, depth + 1, canvas, liveNames, path, consumed, out);
 		} else if (auto it = liveNames.find(n.uuid); it != liveNames.end() && !consumed.contains(n.uuid)) {
-			out.push_back({RowPlan::Scene, depth, it->second, n.uuid, path, canvas, n.color, false, true});
+			out.push_back({RowPlan::Scene, depth, n.alias.isEmpty() ? it->second : n.alias, n.uuid,
+				       path, canvas, n.color, false, true});
 			consumed.insert(n.uuid);
 		}
 		path.pop_back();

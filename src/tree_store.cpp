@@ -22,6 +22,8 @@ static QJsonObject nodeToJson(const TreeNode &n)
 	} else {
 		o["t"] = "scene";
 		o["uuid"] = n.uuid;
+		if (!n.alias.isEmpty())
+			o["alias"] = n.alias;
 		if (!n.name.isEmpty())
 			o["name"] = n.name;
 	}
@@ -46,6 +48,7 @@ static std::unique_ptr<TreeNode> nodeFromJson(const QJsonObject &o)
 	} else if (t == QLatin1String("scene")) {
 		n->type = TreeNode::Scene;
 		n->uuid = o["uuid"].toString();
+		n->alias = o["alias"].toString();
 		if (n->uuid.isEmpty())
 			return nullptr;
 		n->name = o["name"].toString();
@@ -94,6 +97,29 @@ const std::vector<std::unique_ptr<TreeNode>> *TreeStore::canvasRoot(const QStrin
 	return it == roots_.end() ? nullptr : &it->second.children;
 }
 
+QString TreeStore::nextFolderName(const QString &canvas, const QString &base) const
+{
+	QSet<QString> names;
+	std::vector<const TreeNode *> pending;
+	if (const auto *root = nodeAt(canvas, {}))
+		pending.push_back(root);
+	while (!pending.empty()) {
+		const TreeNode *folder = pending.back();
+		pending.pop_back();
+		for (const auto &child : folder->children) {
+			if (child->type == TreeNode::Folder) {
+				names.insert(child->name);
+				pending.push_back(child.get());
+			}
+		}
+	}
+	for (qulonglong number = 1;; ++number) {
+		const QString candidate = base + QString::number(number);
+		if (!names.contains(candidate))
+			return candidate;
+	}
+}
+
 bool TreeStore::insertFolder(const QString &canvas, const NodePath &parent, int index, const QString &name)
 {
 	TreeNode *p = mutableNodeAt(canvas, parent);
@@ -115,6 +141,55 @@ bool TreeStore::renameFolder(const QString &canvas, const NodePath &path, const 
 	if (!n || n->type != TreeNode::Folder)
 		return false;
 	n->name = name;
+	return true;
+}
+
+bool TreeStore::setSceneAlias(const QString &canvas, const NodePath &path, const QString &alias)
+{
+	if (path.empty())
+		return false;
+	TreeNode *n = mutableNodeAt(canvas, path);
+	if (!n || n->type != TreeNode::Scene)
+		return false;
+	n->alias = alias.trimmed();
+	return true;
+}
+
+bool TreeStore::resetToLive(const std::vector<LiveCanvas> &live)
+{
+	if (foreign_)
+		return false;
+	clear();
+	placeMissingScenesAtRoot(live);
+	return true;
+}
+
+bool TreeStore::moveSiblingNodes(const QString &canvas, std::vector<NodePath> sources, int direction)
+{
+	if (foreign_ || sources.empty() || (direction != -1 && direction != 1))
+		return false;
+	std::sort(sources.begin(), sources.end());
+	sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
+	if (sources.front().empty())
+		return false;
+	const NodePath parent(sources.front().begin(), sources.front().end() - 1);
+	for (const auto &path : sources) {
+		if (path.empty() || NodePath(path.begin(), path.end() - 1) != parent || !nodeAt(canvas, path))
+			return false;
+	}
+	TreeNode *p = mutableNodeAt(canvas, parent);
+	if (!p || p->type != TreeNode::Folder)
+		return false;
+	if ((direction < 0 && sources.front().back() == 0) ||
+	    (direction > 0 && sources.back().back() == (int)p->children.size() - 1))
+		return false;
+	if (direction < 0) {
+		for (const auto &path : sources)
+			std::swap(p->children[path.back()], p->children[path.back() - 1]);
+	} else {
+		for (auto it = sources.rbegin(); it != sources.rend(); ++it)
+			std::swap(p->children[it->back()], p->children[it->back() + 1]);
+	}
 	return true;
 }
 
@@ -417,6 +492,73 @@ bool TreeStore::fromJson(const QString &json)
 					root.children.push_back(std::move(n));
 		roots_.emplace(it.key(), std::move(root));
 	}
+	return true;
+}
+
+bool TreeStore::restoreLayout(const QString &json, const std::vector<LiveCanvas> &live)
+{
+	constexpr int maxBytes = 8 * 1024 * 1024;
+	if (foreign_ || live.empty() || json.size() > maxBytes)
+		return false;
+	const QByteArray bytes = json.toUtf8();
+	if (bytes.size() > maxBytes)
+		return false;
+	QJsonParseError error{};
+	const auto document = QJsonDocument::fromJson(bytes, &error);
+	if (error.error != QJsonParseError::NoError || !document.isObject())
+		return false;
+	const auto object = document.object();
+	if (!object["version"].isDouble() || object["version"].toDouble() != kTreeStoreVersion ||
+	    !object["canvases"].isObject())
+		return false;
+	QSet<QString> liveIds;
+	for (const auto &canvas : live)
+		liveIds.insert(canvas.uuid);
+	std::vector<std::pair<QJsonArray, int>> pending;
+	const auto canvases = object["canvases"].toObject();
+	for (auto it = canvases.begin(); it != canvases.end(); ++it) {
+		if (!liveIds.contains(it.key()) || !it.value().isObject())
+			return false;
+		const auto canvas = it.value().toObject();
+		if (!canvas["tree"].isArray())
+			return false;
+		pending.emplace_back(canvas["tree"].toArray(), 1);
+	}
+	// Validate iteratively before handing bounded input to the recursive loader.
+	int nodes = 0;
+	while (!pending.empty()) {
+		auto [children, depth] = std::move(pending.back());
+		pending.pop_back();
+		for (const auto value : children) {
+			if (depth > 64 || ++nodes > 50000 || !value.isObject())
+				return false;
+			const auto node = value.toObject();
+			for (const char *key : {"color", "name", "alias"})
+				if (node.contains(key) && !node[key].isString())
+					return false;
+			if (node.contains("expanded") && !node["expanded"].isBool())
+				return false;
+			if (!node["t"].isString())
+				return false;
+			const QString type = node["t"].toString();
+			if (type == QLatin1String("folder")) {
+				if (!node["name"].isString() || !node["children"].isArray())
+					return false;
+				pending.emplace_back(node["children"].toArray(), depth + 1);
+			} else if (type == QLatin1String("scene")) {
+				if (!node["uuid"].isString() || node["uuid"].toString().isEmpty() || node.contains("children"))
+					return false;
+			} else {
+				return false;
+			}
+		}
+	}
+	TreeStore restored;
+	if (!restored.fromJson(json) || restored.isForeign())
+		return false;
+	restored.resolveAndPrune(live);
+	restored.placeMissingScenesAtRoot(live);
+	*this = std::move(restored);
 	return true;
 }
 
