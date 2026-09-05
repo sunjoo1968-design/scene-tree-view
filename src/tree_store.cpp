@@ -5,8 +5,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <algorithm>
-#include <set>
 
 static QJsonObject nodeToJson(const TreeNode &n)
 {
@@ -61,13 +61,9 @@ TreeNode *TreeStore::mutableNodeAt(const QString &canvas, const NodePath &path)
 		return nullptr;
 	auto it = roots_.find(canvas);
 	if (it == roots_.end()) {
-		// 不存在的 canvas 上，非空路径必然非法 —— 此时绝不能建条目。
-		// 用 roots_[canvas] 会因 map::operator[] 自动建值，让一个「返回 false 的失败操作」
-		// 也改变 toJson() 输出，违反头文件契约，并让 Task 6 的 applyTreeOp
-		// （靠 toJson() 前后比对判断是否真的变了）为失败操作记下空的 undo 条目。
 		if (!path.empty())
 			return nullptr;
-		it = roots_.emplace(canvas, TreeNode{}).first; // 仅根路径：调用方后续必定成功
+		it = roots_.emplace(canvas, TreeNode{}).first;
 	}
 	TreeNode *n = &it->second;
 	for (int idx : path) {
@@ -132,7 +128,7 @@ bool TreeStore::dissolveFolder(const QString &canvas, const NodePath &path)
 	NodePath parentPath(path.begin(), path.end() - 1);
 	TreeNode *p = mutableNodeAt(canvas, parentPath);
 	if (!p)
-		return false; // 不变量保证不会发生，但它是隐式的
+		return false;
 	const int idx = path.back();
 	auto folder = std::move(p->children[idx]);
 	p->children.erase(p->children.begin() + idx);
@@ -150,13 +146,13 @@ bool TreeStore::removeNode(const QString &canvas, const NodePath &path)
 	NodePath parentPath(path.begin(), path.end() - 1);
 	TreeNode *p = mutableNodeAt(canvas, parentPath);
 	if (!p)
-		return false; // 不变量保证不会发生，但它是隐式的
+		return false;
 	p->children.erase(p->children.begin() + path.back());
 	return true;
 }
 
 static bool isPrefixOf(const NodePath &a, const NodePath &b)
-{ // a 是 b 的前缀（含相等）
+{
 	return a.size() <= b.size() && std::equal(a.begin(), a.end(), b.begin());
 }
 
@@ -165,58 +161,51 @@ bool TreeStore::moveNodes(const QString &canvas, std::vector<NodePath> sources, 
 {
 	if (foreign_ || sources.empty())
 		return false;
-	// 用 nodeAt（const，不建条目）做存在性检查：mutableNodeAt 对空路径 + 不存在的 canvas
-	// 会自动建根条目（见其注释），若这里直接用它，一次注定失败的 move（比如源节点根本
-	// 不存在）也会先把目标 canvas 凭空建出来，让"失败必须不留痕"（D-5）破功。
 	const TreeNode *destCheck = nodeAt(canvas, destFolder);
 	if (!destCheck || destCheck->type != TreeNode::Folder)
 		return false;
-	std::sort(sources.begin(), sources.end()); // 文档序
-	std::vector<NodePath> tops;                // 祖先吞并
+	std::sort(sources.begin(), sources.end());
+	std::vector<NodePath> tops;
 	for (const auto &s : sources) {
 		if (s.empty())
-			return false; // 根不可移
+			return false;
 		if (!tops.empty() && isPrefixOf(tops.back(), s))
 			continue;
 		tops.push_back(s);
 	}
 	for (const auto &s : tops) {
 		if (isPrefixOf(s, destFolder))
-			return false; // 不能拖进自身子树
+			return false;
 		if (!nodeAt(canvas, s))
-			return false; // 全部先验存在，避免半程失败
+			return false;
 		NodePath par(s.begin(), s.end() - 1);
 		if (!nodeAt(canvas, par))
-			return false; // D-3 纵深防御：上面的 nodeAt(canvas, s) 已证明
-				      // s 本身可解析，其前缀 par 必然也可解析，这里目前不可达
+			return false;
 	}
-	TreeNode *dest = mutableNodeAt(canvas, destFolder); // 先验已过，canvas 确认存在，不会触发自动建条目
+	TreeNode *dest = mutableNodeAt(canvas, destFolder);
 	if (!dest)
 		return false;
 	int adjusted = std::clamp(destIndex, 0, (int)dest->children.size());
-	// 阈值必须在循环前冻结：拿源索引跟正在缩小的 adjusted 比会漏掉递减。
-	// 反例 root=[w,x,y]，moveNodes({{0},{1}}, {}, 2)（应为空操作）：
-	// {0} 让 adjusted 2→1，随后 {1} 因 1<1 不成立而被漏掉，结果错成 [y,w,x]。
 	const int threshold = adjusted;
-	for (const auto &s : tops) { // 同父且在插入点之前的被移走 → 索引前移
+	for (const auto &s : tops) {
 		NodePath par(s.begin(), s.end() - 1);
 		if (par == destFolder && s.back() < threshold)
 			--adjusted;
 	}
 	std::vector<std::unique_ptr<TreeNode>> grabbed(tops.size());
-	for (int i = (int)tops.size() - 1; i >= 0; --i) { // 逆文档序摘除，前面路径索引不受影响
+	for (int i = (int)tops.size() - 1; i >= 0; --i) {
 		const NodePath &s = tops[i];
 		NodePath par(s.begin(), s.end() - 1);
 		TreeNode *p = mutableNodeAt(canvas, par);
 		grabbed[i] = std::move(p->children[s.back()]);
 		p->children.erase(p->children.begin() + s.back());
 	}
-	for (size_t i = 0; i < grabbed.size(); ++i) // dest 是堆上节点，指针稳定
+	for (size_t i = 0; i < grabbed.size(); ++i)
 		dest->children.insert(dest->children.begin() + adjusted + i, std::move(grabbed[i]));
 	if (insertedAt)
-		*insertedAt = adjusted; // 真实插入点，非调用方传入的 destIndex
+		*insertedAt = adjusted;
 	if (movedCount)
-		*movedCount = (int)grabbed.size(); // 祖先吞并后的真实数量
+		*movedCount = (int)grabbed.size();
 	return true;
 }
 
@@ -284,16 +273,6 @@ bool TreeStore::setExpanded(const QString &canvas, const NodePath &path, bool ex
 	return true;
 }
 
-void TreeStore::touchMru(const QString &sceneUuid, int cap)
-{
-	if (foreign_ || sceneUuid.isEmpty())
-		return;
-	mru_.removeAll(sceneUuid);
-	mru_.prepend(sceneUuid);
-	while (mru_.size() > cap)
-		mru_.removeLast();
-}
-
 static void pruneScenesRec(TreeNode &folder, const QSet<QString> &live)
 {
 	auto &v = folder.children;
@@ -327,10 +306,6 @@ void TreeStore::stampSceneNames(const std::map<QString, QString> &uuidToName)
 		stampRec(root, uuidToName);
 }
 
-// 解析必须两趟。单趟会让靠前的「uuid 已死、名字命中」节点抢走靠后节点用 uuid 正当持有的场景：
-// 两个分支的检查不对称 —— 名字回退查 claimed，uuid 主键分支却无条件 claim。
-// 结果两个节点指向同一 uuid，而 pruneScenesRec 认为两者都活、一个都不清，
-// store 里就永久留下重复 uuid 的幽灵。触发路径极普通：删掉场景 X、再建一个同名的新场景。
 static void claimLiveRec(const TreeNode &folder, const QSet<QString> &liveScenes, QSet<QString> &claimed)
 {
 	for (const auto &c : folder.children) {
@@ -350,11 +325,11 @@ static void resolveRec(TreeNode &folder, const QSet<QString> &liveScenes, const 
 			continue;
 		}
 		if (liveScenes.contains(c->uuid))
-			continue; // 第一趟已 claim
+			continue;
 		if (c->name.isEmpty())
-			continue; // 旧数据无名字，不参与回退
+			continue;
 		if (auto it = liveNames.find(c->name); it != liveNames.end() && !claimed.contains(it->second)) {
-			c->uuid = it->second; // 自愈：复制集合后 uuid 变了，按名字认回来
+			c->uuid = it->second;
 			claimed.insert(c->uuid);
 		}
 	}
@@ -364,21 +339,17 @@ void TreeStore::resolveAndPrune(const std::vector<LiveCanvas> &live)
 {
 	if (foreign_)
 		return;
-	// 保命闸：OBS 永远至少有一个主画布，空活跃集绝不可能是合法状态 —— 只可能是调用方出错。
-	// 此时若照常执行，会把每个画布的根都当作「画布已不存在」抹除，用户文件夹全毁。
-	// 宁可什么都不做：下一次正常的加载事件会重新解析。
 	if (live.empty())
 		return;
-	// 按 canvas 分区：每个画布只认自己的活跃场景，杜绝跨画布幽灵与名字盗用
 	std::map<QString, QSet<QString>> scenesByCanvas;
 	std::map<QString, std::map<QString, QString>> namesByCanvas;
-	QSet<QString> allLive;
 	for (const auto &cv : live) {
 		auto &ss = scenesByCanvas[cv.uuid];
 		auto &nn = namesByCanvas[cv.uuid];
 		for (const auto &sc : cv.scenes) {
+			if (sc.uuid.isEmpty())
+				continue;
 			ss.insert(sc.uuid);
-			allLive.insert(sc.uuid);
 			if (!sc.name.isEmpty())
 				nn[sc.name] = sc.uuid;
 		}
@@ -388,25 +359,19 @@ void TreeStore::resolveAndPrune(const std::vector<LiveCanvas> &live)
 		if (sIt == scenesByCanvas.end()) {
 			it = roots_.erase(it);
 			continue;
-		} // 画布已不存在
+		}
 		const QSet<QString> &liveScenes = sIt->second;
 		QSet<QString> claimed;
-		claimLiveRec(it->second, liveScenes, claimed);                         // 第一趟：uuid 正当持有者先占位
-		resolveRec(it->second, liveScenes, namesByCanvas[it->first], claimed); // 第二趟：名字回退
-		pruneScenesRec(it->second, liveScenes);                                // 清除仍未解析的
+		claimLiveRec(it->second, liveScenes, claimed);
+		resolveRec(it->second, liveScenes, namesByCanvas[it->first], claimed);
+		pruneScenesRec(it->second, liveScenes);
 		++it;
 	}
-	QStringList kept;
-	for (const auto &u : mru_)
-		if (allLive.contains(u))
-			kept << u; // MRU 是全局的，用合集
-	mru_ = kept;
 }
 
 void TreeStore::clear()
 {
 	roots_.clear();
-	mru_.clear();
 	foreign_ = false;
 	rawForeign_.clear();
 }
@@ -418,7 +383,6 @@ QString TreeStore::toJson() const
 	QJsonObject o;
 	o["version"] = kTreeStoreVersion;
 	QJsonObject cs;
-	// 结构按画布 uuid 分区保留：树本来就是这么组织的，且不绑死"只有一个画布"这个当前事实。
 	for (const auto &[uuid, root] : roots_) {
 		QJsonArray tree;
 		for (const auto &c : root.children)
@@ -428,10 +392,6 @@ QString TreeStore::toJson() const
 		cs[uuid] = co;
 	}
 	o["canvases"] = cs;
-	QJsonArray mru;
-	for (const auto &u : mru_)
-		mru.append(u);
-	o["mru"] = mru;
 	return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
@@ -443,7 +403,7 @@ bool TreeStore::fromJson(const QString &json)
 	if (err.error != QJsonParseError::NoError || !doc.isObject())
 		return false;
 	const QJsonObject o = doc.object();
-	if (o["version"].toInt(1) > kTreeStoreVersion) {
+	if (o["version"].toDouble(1) > kTreeStoreVersion) {
 		foreign_ = true;
 		rawForeign_ = json;
 		return true;
@@ -455,13 +415,48 @@ bool TreeStore::fromJson(const QString &json)
 			if (nv.isObject())
 				if (auto n = nodeFromJson(nv.toObject()))
 					root.children.push_back(std::move(n));
-		// 旧版本写过 co["expanded"]（画布标题行的折叠态）。标题行已不存在，读到就忽略。
 		roots_.emplace(it.key(), std::move(root));
 	}
-	for (const auto v : o["mru"].toArray()) {
-		const QString s = v.toString();
-		if (!s.isEmpty())
-			mru_ << s;
-	}
 	return true;
+}
+
+bool TreeStore::placeMissingScenesAtRoot(const std::vector<LiveCanvas> &live)
+{
+	if (foreign_)
+		return false;
+
+	bool changed = false;
+	std::map<QString, QSet<QString>> placedByCanvas;
+	for (const auto &canvas : live) {
+		auto [it, inserted] = placedByCanvas.try_emplace(canvas.uuid);
+		auto &placed = it->second;
+		if (inserted) {
+			std::vector<const TreeNode *> pending;
+			if (const auto *root = nodeAt(canvas.uuid, {}))
+				pending.push_back(root);
+			while (!pending.empty()) {
+				const TreeNode *node = pending.back();
+				pending.pop_back();
+				if (node->type == TreeNode::Scene)
+					placed.insert(node->uuid);
+				else
+					for (const auto &child : node->children)
+						pending.push_back(child.get());
+			}
+		}
+		TreeNode *root = nullptr;
+		for (const auto &scene : canvas.scenes) {
+			if (scene.uuid.isEmpty() || placed.contains(scene.uuid))
+				continue;
+			if (!root)
+				root = mutableNodeAt(canvas.uuid, {});
+			auto node = std::make_unique<TreeNode>();
+			node->type = TreeNode::Scene;
+			node->uuid = scene.uuid;
+			root->children.push_back(std::move(node));
+			placed.insert(scene.uuid);
+			changed = true;
+		}
+	}
+	return changed;
 }

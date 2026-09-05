@@ -7,14 +7,14 @@
 struct RowPlan {
 	enum Kind { Folder, Scene };
 	Kind kind;
-	int depth;      // 缩进层级，内容从 0 起
-	QString name;   // folder 名 / scene 实时名
-	QString uuid;   // scene uuid；folder 为 ""
-	NodePath path;  // store 路径；未归类 scene 为空
-	QString canvas; // 所属 canvas uuid（store 按画布分区，恒为主画布）
+	int depth;
+	QString name;
+	QString uuid;
+	NodePath path;
+	QString canvas;
 	QString color;
-	bool expanded; // Folder：节点展开态
-	bool placed;   // scene：true = 来自 store
+	bool expanded;
+	bool placed;
 };
 
 std::vector<RowPlan> planProjection(const TreeStore &store, const std::vector<LiveCanvas> &live);

@@ -24,9 +24,6 @@ static void walkChildren(const std::vector<std::unique_ptr<TreeNode>> &children,
 	}
 }
 
-// live 由 ObsBridge::liveCanvases 提供，契约是「恰好一项，即主画布」（副画布故意不进树，
-// 理由见那里）。这里仍按 vector 遍历，是为了与 TreeStore::resolveAndPrune 共用同一个入参
-// 类型、且 store 本身按画布分区；多于一项时各画布内容会平铺，没有分组表头。
 std::vector<RowPlan> planProjection(const TreeStore &store, const std::vector<LiveCanvas> &live)
 {
 	std::vector<RowPlan> out;

@@ -37,9 +37,9 @@
         }
     },
     "name": "scene-anchor",
-    "displayName": "SceneAnchor",
-    "version": "1.0.1",
-    "author": "rockbenben",
-    "website": "https://github.com/rockbenben/scene-anchor",
-    "email": "rockbenben@users.noreply.github.com"
+    "displayName": "Scene Tree View",
+    "version": "1.0.7",
+    "author": "Sunjoo (original work by rockbenben)",
+    "website": "https://github.com/sunjoo1968-design/scene-tree-view",
+    "email": "sunjoo1968-design@users.noreply.github.com"
 }

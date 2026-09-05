@@ -1,158 +1,37 @@
-<img src="assets/logo.svg" width="56" align="left" alt="">
+# Scene Tree View
 
-# SceneAnchor
+장면 트리-Made by Sunjoo
 
-> Folder tree for the OBS 32 scene list — the folders live inside the scene collection, so copying or renaming it never loses them.
+OBS 라이브커머스 방송 운영을 위한 장면 폴더 트리 플러그인입니다.
 
-[![License: GPL-2.0-or-later](https://img.shields.io/badge/License-GPL--2.0--or--later-blue)](LICENSE) [![365 Open Source Plan #037](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23037-1f6feb)](https://github.com/rockbenben/365opensource)
+## 기능
 
-[⬇ Download for Windows / macOS / Linux](https://github.com/rockbenben/scene-anchor/releases) · [OBS Forum](https://obsproject.com/forum/resources/sceneanchor.2666/) · [简体中文](README.zh.md)
+- 폴더와 장면의 트리 배치. OBS 기본 장면 목록 순서는 변경하지 않습니다.
+- 송출 장면은 붉은색, 미리보기 장면은 파란색으로 표시합니다.
+- 하단 배치 잠금은 드래그와 폴더 편집을 차단하며 재시작 후에도 유지됩니다.
+- 폴더 더블클릭으로 펼치고 접습니다. 장면 더블클릭에는 별도 전환 동작이 없습니다.
+- 검색과 단일 클릭은 일반 장면 선택입니다. 스튜디오 모드에서는 미리보기에 적용됩니다.
+- 장면 생성과 삭제는 OBS 기본 장면 목록에서 수행합니다.
 
-![The SceneAnchor dock: nested folders, colour labels and unfiled scenes](docs/images/hero-en.webp)
+## 설치
 
-**Scene folders that stay put.** Existing scene-tree plugins keep their folders in a side file keyed by collection name, so copying or renaming a collection loses the lot. SceneAnchor writes the tree into the scene collection's own JSON — the same file as the scenes — so it survives copies, renames, exports, OBS updates, and uninstalling the plugin.
+Windows x64, OBS 32 계열용입니다. OBS를 종료하고 배포 ZIP의 `data`, `obs-plugins` 폴더를 `C:\Program Files\obs-studio\`에 병합합니다.
 
-## Supported
+기존 설치와 폴더 배치 호환성을 위해 DLL 이름 `scene-anchor.dll`과 내부 저장 키는 유지합니다. 중복 설치하지 마세요.
 
-| Item | Detail |
-|---|---|
-| OBS Studio | 32.0 and newer (tested on 32.0.2 and 32.2.2) |
-| Platform | Windows x64 — developed and tested here. macOS (Universal) and Ubuntu x86_64 build and package in CI but have not been run on real hardware; see Limitations |
-| Scenes | Main canvas only — see Limitations |
-| Interface | 12 languages, follows OBS's own language setting |
-| Install | Windows `.exe` installer or `.zip` · macOS `.pkg` installer (unsigned, see Install) · Linux `.deb` |
+## 빌드
 
-## Features
+Visual Studio 2022 C++ Build Tools, Windows SDK, CMake가 필요합니다. 기본 프리셋은 SDK 10.0.22621을 사용합니다. SDK 10.0.26100.0 환경에서는 다음을 실행합니다.
 
-- **Folder tree** with unlimited nesting for organizing scenes
-- **Multi-select drag & drop** to move scenes and folders around, with proper OBS-native undo/redo
-- **Live search** that filters the tree as you type — press **Enter** to transition to the first switchable match (folder rows and anything collapsed out of view are skipped, because the walk follows what is actually on screen; in Studio Mode it sets the preview, like every other switch in this dock), **Esc** to clear. Bind a hotkey (Settings → Hotkeys → *SceneAnchor: focus the search box*) and the whole flow is keyboard-only: hotkey, two characters, Enter.
-- **Color labels** on folders and scenes — 8 presets plus any custom color, automatically adjusted to stay readable on your theme (see below)
-- **MRU strip** of recently-used scenes, one click to switch; how many fit is computed from the dock's width, so names stay readable instead of being chopped to stubs
-- **Empty-state guidance**: with no folders yet the dock looks exactly like OBS's own scene list — right down to the left edge, since the expander column is only reserved once a folder exists — so it says how to make the first one; the hint disappears once you do, and also whenever the dock is too small to show it whole (a hint cut off mid-sentence reads as a bug)
-- **Options** in the empty-area right-click menu: double-click action (transition / rename / none), whether selecting a scene switches to it, whether to show the MRU strip, whether to show icons (one switch covering folders and scenes alike, the way OBS's own source list does it)
-- **Full right-click menu**: transition, transition override, rename, duplicate, copy/paste filters, filters, screenshot, windowed/fullscreen projector, show in multiview, color
-- **Tree drawn to stay legible**: the expander chevron and the per-level indent guides are painted by the plugin rather than left to Qt's defaults, so they follow the active theme instead of vanishing on dark ones, and every folder carries a chevron — empty ones included, so a folder never reads as a scene
-- **Narrow-dock friendly**: usable down to ~120 logical pixels wide — nothing forces the dock to a minimum width
-- **12 languages**: English, Simplified & Traditional Chinese, Spanish, Portuguese (BR), German, Japanese, Russian, French, Korean, Italian, Polish
-- Uses only public OBS APIs — no private Qt slots, no `findChild`, no `QMetaObject::invokeMethod` on the main window
-
-### About the color labels
-
-Colors are stored exactly as you pick them, but drawn against the tree's *actual* background: before rendering, the label's HSL lightness is nudged until it clears the WCAG 3:1 contrast floor for graphical elements. Hue and saturation are untouched.
-
-This is why presets can be chosen for looks rather than for contrast, and why a custom colour that would be invisible on your theme (a near-black blue on a dark theme, say) still shows up. One stored value stays correct on light and dark themes alike — no per-theme palette, so the same scene collection never renders different colours on different machines.
-
-## Why another scene tree plugin
-
-Existing scene-tree plugins ([DigitOtter/obs_scene_tree_view](https://github.com/DigitOtter/obs_scene_tree_view), [TheThirdRail/scene-tree-view](https://github.com/TheThirdRail/scene-tree-view)) are useful but have three recurring problems SceneAnchor was built to avoid:
-
-1. **Your folders won't disappear** — the mechanism is in the opening paragraph above. Both linked projects' issue trackers carry reports of exactly the side-file failure it avoids.
-2. **Public API only, so it won't silently break.** No private Qt slots, no `findChild`/`QMetaObject::invokeMethod`/`property()` calls into the OBS main window. Plugins that reach into private UI internals tend to break across OBS releases without warning.
-3. **Organize, search, and switch — all in one dock.** Nested folders, color labels, and live search together, so you don't need a second plugin just to find a scene in a long list.
-
-## Install
-
-Grab your platform's file from [Releases](https://github.com/rockbenben/scene-anchor/releases): **Windows** an `.exe` installer (or a `.zip`), **macOS** a `.pkg` installer, **Linux** a `.deb` (`sudo apt install ./scene-anchor-*.deb`).
-
-**Windows: run the `.exe` and you're done.** It defaults to `C:\ProgramData\obs-studio\plugins\` — the one plugin directory outside OBS's own program folder that OBS scans on Windows, and the one an OBS update won't wipe. You can point it at an OBS folder instead (a portable copy, or `C:\Program Files\obs-studio`) and it will lay the files out the way *that* location needs; the two layouts differ and the installer picks the right one from the folder you choose. Switching between the two also cleans up the old copy, so OBS never ends up loading the plugin twice. Both targets are machine-wide, so it asks for administrator rights once. It shows up under Settings → Apps if you ever want it gone. The installer is not code-signed, so Windows SmartScreen will say *"Windows protected your PC"* — click **More info → Run anyway**.
-
-**Windows by hand (the `.zip`).** Unzip it and move the whole `scene-anchor` folder into `C:\ProgramData\obs-studio\plugins\` — don't split `bin` and `data` up, the archive is already in the layout OBS expects. Paste `%ProgramData%\obs-studio\plugins` into the Explorer address bar to get there, creating the `plugins` folder if it isn't there yet. The result is what the installer would have produced:
-
-```
-C:\ProgramData\obs-studio\plugins\scene-anchor\bin\64bit\scene-anchor.dll
-C:\ProgramData\obs-studio\plugins\scene-anchor\data\locale\en-US.ini
+```powershell
+cmake -S . -B build_x64_local -G "Visual Studio 17 2022" -A "x64,version=10.0.26100.0" -DENABLE_FRONTEND_API=ON -DENABLE_QT=ON
+cmake --build build_x64_local --config RelWithDebInfo --parallel --target scene-anchor
 ```
 
-Note it is `ProgramData`, not `%APPDATA%` — OBS reads plugins from the machine-wide directory on Windows, and a copy under `AppData\Roaming` is silently never loaded.
+의존성은 최초 구성 시 내려받습니다. `tests`에는 저장소·투영 회귀 테스트가 있습니다. 실제 OBS 조작과 장시간 방송 안정성은 별도로 검증해야 합니다.
 
-**Inside an OBS folder instead (required for portable OBS).** That layout is different, and the two folders *do* split up: `bin\64bit\*` goes to `<OBS>\obs-plugins\64bit\`, and the **contents** of `data\` go to `<OBS>\data\obs-plugins\scene-anchor\` — where `<OBS>` is your portable folder, or `C:\Program Files\obs-studio` for a normal install. If you'd rather not do that by hand, the installer covers this case too — just point it at `<OBS>` on its destination page.
+## 저작권
 
-Restart OBS after any of these.
-
-**macOS: the installer is not signed.** Double-clicking the `.pkg` gets you *"cannot be opened because it is from an unidentified developer"* — right-click it and choose **Open** instead, or allow it under System Settings → Privacy & Security. This is about the installer, not the plugin: OBS ships `com.apple.security.cs.disable-library-validation` in its own entitlements (`frontend/cmake/macos/entitlements.plist`) precisely so it can load third-party plugins, so an unsigned plugin loads normally once installed. Signing the installer needs an Apple Developer ID, which most individual OBS plugin authors don't buy — [obs-move-transition](https://github.com/exeldro/obs-move-transition), [waveform](https://github.com/phandasm/waveform) and [obs-multi-rtmp](https://github.com/sorayuki/obs-multi-rtmp) all ship unsigned packages today.
-
-**After installing, enable the dock.** SceneAnchor's dock is not visible by default — OBS does not automatically show new plugin docks. Open OBS's **Docks** menu (View → Docks on some platforms) and check **SceneAnchor** to make it appear. If you don't see the dock after installing, this is almost always the reason — the plugin has not failed to load.
-
-## Limitations
-
-- **Deleting a scene that is nested inside another scene** (i.e. used as a source within another scene): undo restores the deleted scene and its child sources, but does **not** restore its placement entry inside the parent scene that referenced it. OBS's own delete path handles this case with `scene_used_in_other_scenes` + `RemoveSceneAndReleaseNested`; SceneAnchor does not implement an equivalent. This is an accepted, documented gap, not an oversight.
-- **Main canvas only.** Scenes belonging to a secondary canvas — a vertical canvas from Aitum Vertical, or any canvas another plugin creates with `obs_frontend_add_canvas` — do not appear in this dock at all. They are switched in that canvas's own dock, which is also where they belong.
-
-  This is a decision, not a missing feature. OBS 32 has no API for setting a secondary canvas's current scene: the frontend surface is `get_canvases` / `add_canvas` / `remove_canvas` and nothing more. The one function that looks generic, `obs_canvas_set_channel(canvas, 0, scene)`, is never called by OBS's own frontend — libobs uses it only inside `obs_set_output_source`, for the main canvas — and plugins that own a canvas typically keep a *transition* source in channel 0, not a scene. Writing a scene there would evict the transition, hard-cut the picture, and leave that plugin's idea of its current scene out of sync with what is on screen. A "generic" implementation would be active breakage.
-
-  Individual plugins do expose their own switching hooks (Aitum Vertical ≥1.6.1 registers `aitum_vertical_switch_scene` on the global proc handler). Supporting one vendor and not the next is neither fair nor maintainable, and a scene this dock cannot switch to earns only two of its three verbs — find, organize, switch. Two is not enough to justify a section of the UI.
-- **Toggling "Show in multiview" does not refresh a currently-open multiview projector immediately.** The change takes effect the next time the tree rebuilds (there is no public API to force a multiview refresh).
-- **Drag-and-drop is disabled while a search filter is active**, since the filter hides some items and a drop position could no longer match what's visually shown. Clear the search box to re-enable dragging.
-
-- **Selecting a scene switches to it, by default** — including when you move the selection with the arrow keys. This matches OBS's own scene list, but that list is only ever used for switching, while this dock is also used for dragging, renaming and colouring. Arrow-keying past eight scenes to reach a folder is eight live program switches. Turn off **Selection Switches Scene** in the empty-area right-click menu while you reorganize; double-click and the menu's **Transition to Scene** still work.
-- **Changing a default in a new build does not reach existing users.** OBS persists plugin settings on exit, so once the plugin has run once, the stored value wins over any default the code declares. Defaults only apply to a fresh install.
-
-**Gray areas**: transition override is stored under the `"transition"` / `"transition_duration"` private-settings keys, and multiview visibility under `"show_in_multiview"`. These keys are accessible through public API calls, but the keys themselves are an OBS frontend convention rather than a documented API contract — a future OBS version could change them without notice.
-
-- **Only Windows has been exercised on real hardware.** Every manual check in [`docs/pre-release-checklist.md`](docs/pre-release-checklist.md) — drag, undo/redo, delete-undo, themes, localisation — was run on Windows against OBS 32.0.2 and 32.2.2. The macOS and Linux targets compile and package in CI, and the plugin uses no platform-specific code, but nobody has yet launched OBS with it on either. Treat those two as untested rather than broken, and please report what you find.
-
-**Cosmetic, unexplained**: on OBS 32.2 (Qt 6.11) the log carries one `QWidgetWindow(… name="scene_anchor_dockWindow") must be a top level window.` warning when the dock is dragged. It does not appear on OBS 32.0 (Qt 6.8). Nothing in this plugin creates or manipulates a `QWindow` — the dock widget is wrapped by OBS's own `OBSDock` — and the dock behaves correctly. Recorded here rather than left unmentioned.
-
-## Reporting bugs
-
-Bugs go to [GitHub Issues](https://github.com/rockbenben/scene-anchor/issues). Four things make a report actionable:
-
-- **OBS version, platform, and plugin version.** The plugin prints the last one when it loads: `[scene-anchor] plugin loaded successfully (version 1.0.0)`.
-- **The log from that session.** Help → Log Files → Upload Current Log File gives a shareable link; every line this plugin writes is prefixed `[scene-anchor]`.
-- **What you did, what you expected, what happened** — and whether undo or redo was involved, because that is where this plugin's riskiest code paths are.
-- **If folders went missing, attach the scene collection itself** (Scene Collection → Export Scene Collection). The tree is stored inside that file, so it is the evidence; a lost-folders report without it usually can't be diagnosed.
-
-If OBS crashed rather than misbehaved, add the crash report too: Help → Crash Reports → Show Crash Reports.
-
-## Translations
-
-Every string lives in `data/locale/<lang>.ini`; the plugin ships 12 of the 77 locales OBS itself supports. OBS falls back to `en-US` for any key a locale is missing, so a partial file is safe to contribute.
-
-Terminology is anchored to OBS's own locale files rather than translated freshly: *scene*, *rename*, *duplicate*, *filters*, *remove*, *transition*, *transition override*, *show in multiview*, *screenshot*, *custom color* and *fullscreen* all reuse the wording OBS already uses in that language, so the plugin reads as part of the host application. Menu items follow OBS's capitalisation too — Title Case in English (`Copy Filters`, `Show in Multiview`), sentence case wherever OBS itself uses it. Two words OBS has no term for — *folder* and *search* — use the platform-conventional word for each language.
-
-Two deliberate divergences. **Dissolve folder** does not borrow OBS's *Ungroup* (`Basic.Main.Ungroup`) even though the operation is identical — a folder is not a group, and reusing the group vocabulary for it would suggest the two features are the same thing. Chinese *Duplicate* stays **创建副本** rather than OBS's 复制. OBS uses 复制 for both *Copy* and *Duplicate*, and this plugin's context menu contains 复制滤镜 (*Copy Filters*) a few rows away — anchoring here would create a real ambiguity rather than remove one.
-
-**Only `en-US`, `zh-CN` and `zh-TW` have been checked by a speaker.** The other nine are term-anchored but unreviewed; corrections are welcome and are a one-line pull request. If you spot a wrong word, that file is the only thing you need to touch.
-
-Keys must match `en-US` exactly — same key set, same `%1` placeholders, UTF-8 without BOM. Run `python tools/check-locales.py` after editing: it checks all of that plus duplicate keys, line endings, empty values, ellipsis consistency, strings long enough to be cut off in a narrow dock, whether the language is one OBS actually ships, and whether every key referenced by `obs_module_text` is defined and every defined key is used.
-
-## Build
-
-Requires the [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate) toolchain (CMake presets, `buildspec.json`-pinned obs-deps/Qt6). Only OBS Studio 32+ is supported.
-
-**The pinned dependencies are deliberately the oldest supported target** (obs-studio 32.0.2, Qt 6.8.3), not the newest. Qt's binary compatibility runs one way: a plugin built against 6.8 loads on 6.9/6.10/6.11 runtimes, but one built against 6.11 will not load on 6.8. OBS 32.2 ships Qt 6.11; building against it would silently drop support for every OBS 32.0 and 32.1 user. Same reasoning for libobs — compiling against the 32.0.2 headers guarantees we only call APIs that exist across the whole supported range. Only raise the pins if a feature genuinely requires a newer API.
-
-```bash
-# Windows x64
-cmake --preset windows-x64
-cmake --build --preset windows-x64 --config RelWithDebInfo
-
-# macOS
-cmake --preset macos
-cmake --build --preset macos --config RelWithDebInfo
-
-# Ubuntu x86_64
-cmake --preset ubuntu-x86_64
-cmake --build --preset ubuntu-x86_64 --config RelWithDebInfo
-```
-
-Unit tests (no OBS runtime required, links libobs directly):
-
-```bash
-cmake -S tests -B build_tests -G Ninja
-cmake --build build_tests
-ctest --test-dir build_tests --output-on-failure
-```
-
-## Design notes
-
-[`docs/design.md`](docs/design.md) is the design spec: why the tree is stored inside the collection JSON, why nothing touches OBS's private Qt internals, how the undo model works, and which tradeoffs were made deliberately — including the ones this README only states as facts, such as the icons toggle covering folders and the chevron being painted rather than left to Qt. Source comments cite its sections (`spec §2`, `spec §4`) rather than repeating the reasoning.
-
-[`docs/pre-release-checklist.md`](docs/pre-release-checklist.md) is the manual verification pass, with the measurements each item produced. Run it before shipping a binary — especially after touching the delete, undo or drag paths, which is where its only real defect was caught.
-
-## About the 365 Open Source Plan
-
-Project **#037** of the [365 Open Source Plan](https://github.com/rockbenben/365opensource) — one person + AI, 300+ open-source projects in a year.
-
-[Submit your idea →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)
+Sunjoo가 방송 운영 용도로 수정한 SceneAnchor 파생 프로젝트입니다.
+원본: https://github.com/rockbenben/scene-anchor (rockbenben).
+원저작권 고지와 GPL-2.0-or-later 라이선스를 유지합니다. 자세한 내용은 [LICENSE](LICENSE)를 참고하세요.

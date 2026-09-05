@@ -39,16 +39,8 @@ target_sources(
   PRIVATE src/module.cpp src/obs_bridge.cpp src/tree_dock.cpp src/tree_store.cpp src/projection.cpp
 )
 
-# OBS 32 插件清单（libobs/obs-module.c 的 obs_module_load_metadata 会读插件 data 目录下的
-# manifest.json）。填了它，obs_get_module_id / obs_get_module_version 才有返回值——32.2 的
-# 插件管理器只渲染名字，这两个字段是存而未显，属于为后续版本铺路。
 #
-# display_name 必须写：obs_get_module_name 一旦发现 metadata 存在就优先取 metadata->display_name，
-# 而缺失的 JSON 键经 obs_data_get_string 得到的是空串（非 NULL），会让插件管理器回落到显示
-# 二进制文件名。也正因为它压过 C 导出的 obs_module_name()，这一项无法本地化——
-# 品牌名保持英文，界面里那个可本地化的"场景锚点"仍由 dock 标题承担。
 #
-# 生成而非静态文件：版本号与 name/id/website 全部取自 buildspec.json，避免发版时漏改。
 string(JSON _display_name GET ${buildspec} displayName)
 set(_description "Scene folders that stay put.")
 configure_file(cmake/common/resources/manifest.json.in "${CMAKE_CURRENT_BINARY_DIR}/manifest.json" @ONLY)
@@ -56,9 +48,6 @@ target_add_resource(${CMAKE_PROJECT_NAME} "${CMAKE_CURRENT_BINARY_DIR}/manifest.
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 
-# Windows 安装包脚本。放在这里而不是 cmake/windows/helpers.cmake：那一份是上游
-# obs-plugintemplate 的模板代码，改动会在下次同步模板时变成冲突。这里只做变量替换，
-# 不进构建图——真正编译 .exe 的是发行流程里的 iscc（见 .github/scripts/Package-Windows.ps1）。
 if(OS_WINDOWS)
   configure_file(build-aux/installer-Windows.iss.in "${CMAKE_CURRENT_BINARY_DIR}/installer-Windows.generated.iss" @ONLY)
 endif()
