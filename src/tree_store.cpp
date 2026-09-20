@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QSet>
 #include <algorithm>
+#include <iterator>
 
 static QJsonObject nodeToJson(const TreeNode &n)
 {
@@ -157,7 +158,7 @@ bool TreeStore::setSceneAlias(const QString &canvas, const NodePath &path, const
 
 bool TreeStore::resetToLive(const std::vector<LiveCanvas> &live)
 {
-	if (foreign_)
+	if (foreign_ || live.empty())
 		return false;
 	clear();
 	placeMissingScenesAtRoot(live);
@@ -207,8 +208,9 @@ bool TreeStore::dissolveFolder(const QString &canvas, const NodePath &path)
 	const int idx = path.back();
 	auto folder = std::move(p->children[idx]);
 	p->children.erase(p->children.begin() + idx);
-	for (size_t i = 0; i < folder->children.size(); ++i)
-		p->children.insert(p->children.begin() + idx + i, std::move(folder->children[i]));
+	p->children.insert(p->children.begin() + idx,
+			   std::make_move_iterator(folder->children.begin()),
+			   std::make_move_iterator(folder->children.end()));
 	return true;
 }
 
@@ -275,8 +277,8 @@ bool TreeStore::moveNodes(const QString &canvas, std::vector<NodePath> sources, 
 		grabbed[i] = std::move(p->children[s.back()]);
 		p->children.erase(p->children.begin() + s.back());
 	}
-	for (size_t i = 0; i < grabbed.size(); ++i)
-		dest->children.insert(dest->children.begin() + adjusted + i, std::move(grabbed[i]));
+	dest->children.insert(dest->children.begin() + adjusted,
+			      std::make_move_iterator(grabbed.begin()), std::make_move_iterator(grabbed.end()));
 	if (insertedAt)
 		*insertedAt = adjusted;
 	if (movedCount)

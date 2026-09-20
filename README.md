@@ -4,7 +4,7 @@
 
 OBS 라이브커머스 방송 운영을 위한 장면 폴더 트리 플러그인입니다.
 
-최신 배포: [1.0.10 Windows x64 ZIP](https://github.com/sunjoo1968-design/scene-tree-view/releases/download/v1.0.10/scene-tree-view-1.0.10-windows-x64.zip)
+최신 배포: [1.0.11 Windows x64 ZIP](https://github.com/sunjoo1968-design/scene-tree-view/releases/download/v1.0.11/scene-tree-view-1.0.11-windows-x64.zip)
 
 ## 기능
 

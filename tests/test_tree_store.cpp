@@ -633,7 +633,10 @@ static void test_reset_to_live()
 		CHECK(N(s.nodeAt("cv1", {i})).alias.isEmpty());
 	}
 	CHECK(N(s.nodeAt("cv2", {0})).uuid == QStringLiteral("z"));
-	CHECK(s.resetToLive({}));
+	const QString beforeUnavailable = s.toJson();
+	CHECK(!s.resetToLive({}));
+	CHECK(s.toJson() == beforeUnavailable);
+	CHECK(s.resetToLive({{"cv1", "Main", {}}}));
 	CHECK(s.canvasRoot("cv1") == nullptr);
 	CHECK(s.canvasRoot("cv2") == nullptr);
 	const QString foreign = QStringLiteral("{\"version\":9,\"future\":true}");
@@ -776,6 +779,105 @@ static QString layoutJson(const QJsonArray &tree)
 	}).toJson(QJsonDocument::Compact));
 }
 
+static void test_bulk_dissolve_and_move_identity()
+{
+	constexpr int count = 10000;
+	QJsonArray children;
+	for (int i = 0; i < count; ++i)
+		children.append(QJsonObject{{"t", "scene"}, {"uuid", QString::number(i)},
+			{"alias", QStringLiteral("Alias %1").arg(i)},
+			{"color", i % 2 ? "#abcdef" : "#123456"}});
+	TreeStore s;
+	CHECK(s.fromJson(layoutJson({
+		QJsonObject{{"t", "scene"}, {"uuid", "before"}},
+		QJsonObject{{"t", "folder"}, {"name", "Bulk"}, {"children", children}},
+		QJsonObject{{"t", "scene"}, {"uuid", "after"}},
+		QJsonObject{{"t", "folder"}, {"name", "Destination"}, {"children", QJsonArray{
+			QJsonObject{{"t", "scene"}, {"uuid", "left"}},
+			QJsonObject{{"t", "scene"}, {"uuid", "right"}}}}}})));
+	const TreeNode *before = s.nodeAt("cv1", {0});
+	const TreeNode *after = s.nodeAt("cv1", {2});
+	const TreeNode *dest = s.nodeAt("cv1", {3});
+	const TreeNode *left = s.nodeAt("cv1", {3, 0});
+	const TreeNode *right = s.nodeAt("cv1", {3, 1});
+	std::vector<const TreeNode *> original;
+	for (int i = 0; i < count; ++i)
+		original.push_back(s.nodeAt("cv1", {1, i}));
+	CHECK(s.dissolveFolder("cv1", {1}));
+	CHECK(C(s.canvasRoot("cv1")).size() == count + 3);
+	CHECK(s.nodeAt("cv1", {0}) == before);
+	CHECK(s.nodeAt("cv1", {count + 1}) == after);
+	CHECK(s.nodeAt("cv1", {count + 2}) == dest);
+	std::vector<NodePath> sources;
+	for (int i = 0; i < count; ++i) {
+		const TreeNode *node = s.nodeAt("cv1", {i + 1});
+		CHECK(node == original[i]);
+		CHECK(N(node).uuid == QString::number(i));
+		CHECK(N(node).alias == QStringLiteral("Alias %1").arg(i));
+		CHECK(N(node).color == (i % 2 ? QStringLiteral("#abcdef") : QStringLiteral("#123456")));
+		sources.push_back({count - i});
+	}
+	int at = -1, moved = -1;
+	CHECK(s.moveNodes("cv1", sources, {count + 2}, 1, &at, &moved));
+	CHECK(at == 1 && moved == count);
+	CHECK(C(s.canvasRoot("cv1")).size() == 3);
+	CHECK(s.nodeAt("cv1", {0}) == before);
+	CHECK(s.nodeAt("cv1", {1}) == after);
+	CHECK(s.nodeAt("cv1", {2}) == dest);
+	CHECK(N(s.nodeAt("cv1", {2})).children.size() == count + 2);
+	CHECK(s.nodeAt("cv1", {2, 0}) == left);
+	CHECK(s.nodeAt("cv1", {2, count + 1}) == right);
+	for (int i = 0; i < count; ++i) {
+		const TreeNode *node = s.nodeAt("cv1", {2, i + 1});
+		CHECK(node == original[i]);
+		CHECK(N(node).uuid == QString::number(i));
+		CHECK(N(node).alias == QStringLiteral("Alias %1").arg(i));
+		CHECK(N(node).color == (i % 2 ? QStringLiteral("#abcdef") : QStringLiteral("#123456")));
+	}
+}
+
+static void test_move_mixed_selection_identity()
+{
+	TreeStore s;
+	for (int parent = 0; parent < 3; ++parent) {
+		CHECK(s.insertFolder("cv1", {}, parent, QString::number(parent)));
+		for (int i = 0; i < 4; ++i)
+			CHECK(s.placeScene("cv1", QStringLiteral("%1-%2").arg(parent).arg(i), {parent}, i));
+	}
+	CHECK(s.insertFolder("cv1", {0}, 2, "Nested"));
+	CHECK(s.placeScene("cv1", "nested", {0, 2}, 0));
+	const TreeNode *nested = s.nodeAt("cv1", {0, 2, 0});
+	std::vector<const TreeNode *> expected;
+	for (const NodePath &path : std::vector<NodePath>{{2, 0}, {0, 0}, {0, 2}, {0, 4},
+		{1, 1}, {1, 3}, {2, 1}, {2, 2}, {2, 3}})
+		expected.push_back(s.nodeAt("cv1", path));
+	const TreeNode *keepA = s.nodeAt("cv1", {0, 1});
+	const TreeNode *keepB = s.nodeAt("cv1", {0, 3});
+	const TreeNode *keepC = s.nodeAt("cv1", {1, 0});
+	const TreeNode *keepD = s.nodeAt("cv1", {1, 2});
+	std::vector<const TreeNode *> parents;
+	for (int i = 0; i < 3; ++i)
+		parents.push_back(s.nodeAt("cv1", {i}));
+	int at = -1, moved = -1;
+	CHECK(s.moveNodes("cv1", {{1, 3}, {0, 2, 0}, {0, 4}, {1, 1}, {0, 2}, {0, 0}},
+		{2}, 1, &at, &moved));
+	CHECK(at == 1 && moved == 5);
+	CHECK(C(s.canvasRoot("cv1")).size() == 3);
+	for (int i = 0; i < 3; ++i)
+		CHECK(s.nodeAt("cv1", {i}) == parents[i]);
+	CHECK(N(s.nodeAt("cv1", {0})).children.size() == 2);
+	CHECK(N(s.nodeAt("cv1", {1})).children.size() == 2);
+	CHECK(s.nodeAt("cv1", {0, 0}) == keepA);
+	CHECK(s.nodeAt("cv1", {0, 1}) == keepB);
+	CHECK(s.nodeAt("cv1", {1, 0}) == keepC);
+	CHECK(s.nodeAt("cv1", {1, 1}) == keepD);
+	CHECK(N(s.nodeAt("cv1", {2})).children.size() == expected.size());
+	for (int i = 0; i < (int)expected.size(); ++i)
+		CHECK(s.nodeAt("cv1", {2, i}) == expected[i]);
+	CHECK(N(s.nodeAt("cv1", {2, 2})).children.size() == 1);
+	CHECK(s.nodeAt("cv1", {2, 2, 0}) == nested);
+}
+
 static void test_restore_layout()
 {
 	const std::vector<LiveCanvas> live{{"cv1", "Main", {{"a", "A"}, {"b", "B"}, {"c", "C"}}}};
@@ -875,6 +977,8 @@ static void test_restore_layout_rejections()
 int main()
 {
 	test_roundtrip();
+	test_bulk_dissolve_and_move_identity();
+	test_move_mixed_selection_identity();
 	test_restore_layout();
 	test_restore_layout_rejections();
 	test_next_folder_name();
