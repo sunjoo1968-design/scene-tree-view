@@ -38,8 +38,8 @@
     },
     "name": "scene-anchor",
     "displayName": "Scene Tree View",
-    "version": "1.0.11",
-    "author": "Sunjoo (original work by rockbenben)",
+    "version": "1.1.0",
+    "author": "SunjooAn (original work by rockbenben)",
     "website": "https://github.com/sunjoo1968-design/scene-tree-view",
     "email": "sunjoo1968-design@users.noreply.github.com"
 }

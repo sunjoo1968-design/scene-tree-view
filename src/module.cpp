@@ -9,7 +9,7 @@
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
-OBS_MODULE_AUTHOR("Sunjoo; original work by rockbenben")
+OBS_MODULE_AUTHOR("SunjooAn; original work by rockbenben")
 
 MODULE_EXPORT const char *obs_module_name(void)
 {

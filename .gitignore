@@ -30,3 +30,6 @@
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+
+# OBS33 build and release tooling
+!/scripts
