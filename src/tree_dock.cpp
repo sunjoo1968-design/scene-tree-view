@@ -638,7 +638,7 @@ TreeDock::TreeDock()
 	removeShortcut->setContext(Qt::WidgetShortcut);
 	connect(removeShortcut, &QShortcut::activated, this, [this] { removeFolders(); });
 
-	auto *versionLabel = new QLabel(QString("SunjooAn · %1 · OBS 33 RC1").arg(PLUGIN_VERSION), this);
+	auto *versionLabel = new QLabel(QString("SunjooAn · %1 · OBS 33.0.0").arg(PLUGIN_VERSION), this);
 	if (layout()) layout()->addWidget(versionLabel);
 	obs_log(LOG_INFO, "dock constructed");
 }

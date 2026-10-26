@@ -17,7 +17,7 @@ def copy(source,target):
 copy(dll.relative_to(root),f'plugins/{module}/{module}.dll')
 if component=='scene-tree': shutil.copytree(root/'data',stage/f'plugins/{module}/data',dirs_exist_ok=True)
 data=stage/f'plugins/{module}/data';data.mkdir(parents=True,exist_ok=True)
-(data/'manifest.json').write_text(json.dumps(dict(name=module,id='com.sunjoo.obs-link.'+module,display_name='Sunjoo OBS Link '+display,version=version,os_arch='windows-x64',description='SunjooAn / OBS 33.0.0-rc1',urls={})),encoding='utf-8')
+(data/'manifest.json').write_text(json.dumps(dict(name=module,id='com.sunjoo.obs-link.'+module,display_name='Sunjoo OBS Link '+display,version=version,os_arch='windows-x64',description='SunjooAn / OBS 33.0.0',urls={})),encoding='utf-8')
 copy('docs/OBS33.md','README.md');copy('docs/OBS33-VALIDATION.md','VALIDATION.md')
 # Build from the complete source ZIP using scripts/build-obs33.ps1.
 if component=='controller':
@@ -37,7 +37,7 @@ for f in files:
  assert not any(n in str(f.relative_to(stage)).lower() for n in ['wifi-tally.json','local-resume','node_modules','layout.json','.local']),f
 rows=[hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.relative_to(stage).as_posix() for f in files]
 (stage/'SHA256SUMS.txt').write_text('\n'.join(rows)+'\n',encoding='utf-8')
-output=root/'release'/f'sunjoo-obs-link-{component}-{version}-obs33-rc1-windows-x64.zip'
+output=root/'release'/f'sunjoo-obs-link-{component}-{version}-obs33-windows-x64.zip'
 with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as z:
  for f in stage.rglob('*'):
   if f.is_file():z.write(f,f.relative_to(stage).as_posix())

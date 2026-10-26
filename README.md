@@ -1,3 +1,5 @@
+> **OBS33.0.0 정식용 1.1.1 / SunjooAn**: [새 설치·보존 안내](docs/OBS33.md), [검증 결과](docs/OBS33-VALIDATION.md). 기존 OBS32 버전은 유지합니다. 아래 이전 배포 표기는 변경 이력입니다.
+
 > **OBS 33 RC1 시험판**: [새 설치 및 호환 안내](docs/OBS33.md). 이전 배포는 OBS 32 Legacy로 보존합니다. 제작자 SunjooAn · 1.1.0
 
 # Scene Tree View
